@@ -1,11 +1,12 @@
 # /// script
 # requires-python = ">=3.14"
 # dependencies = [
+#   "aiohttp",
 #   "beautifulsoup4",
-#   "requests",
 # ]
 # ///
 
+import asyncio
 import json
 import mimetypes
 import re
@@ -15,11 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Collection
 
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 
-
-START = "https://sethmlarson.dev"
 
 people = set()
 human_jsons = {}
@@ -27,30 +26,27 @@ human_jsons = {}
 
 @dataclass
 class Resp:
-    resp: Any
+    resp: aiohttp.ClientResponse
+    content: bytes
 
     def soup(self):
-        return BeautifulSoup(self.resp.content, "html.parser")
+        return BeautifulSoup(self.content, "html.parser")
 
     @property
     def url(self) -> str:
-        return self.resp.url
+        return str(self.resp.url)
 
-    @property
-    def content(self) -> bytes:
-        return self.resp.content
-
-    def json(self) -> Any:
-        return self.resp.json()
+    def json(self) -> dict:
+        return json.loads(self.content)
 
     def save(self, *, dirname: str = "") -> None:
-        filename = re.sub(r"[^\w]", "_", self.resp.url.partition("://")[-1])
+        filename = re.sub(r"[^\w]", "_", self.url.partition("://")[-1])
         content_type = (
             self.resp.headers.get("content-type", "").partition(";")[0].strip()
         )
         ext = mimetypes.guess_extension(content_type) or ".dat"
         with Path(dirname, f"{filename}{ext}").open("wb") as f:
-            f.write(self.resp.content)
+            f.write(self.content)
 
 
 @dataclass
@@ -61,23 +57,24 @@ class Req:
     ok_errors: Collection[int] = ()
     reason: str = ""
 
-    def get(self) -> Resp | None:
+    async def get(self) -> Resp | None:
         if self.base:
             url = urllib.parse.urljoin(self.base, self.url)
         else:
             url = self.url
-        resp = requests.get(url, timeout=10, allow_redirects=True)
-        if resp.status_code != 200 and self.fail_ok:
-            return None
-        if resp.status_code in self.ok_errors:
-            return None
-        resp.raise_for_status()
-        return Resp(resp)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10, allow_redirects=True) as aresp:
+                if aresp.status != 200 and self.fail_ok:
+                    return None
+                if aresp.status in self.ok_errors:
+                    return None
+                aresp.raise_for_status()
+                return Resp(aresp, await aresp.content.read())
 
 
-def get_human_json(url: str) -> dict | None:
+async def get_human_json(url: str) -> dict | None:
     # fail_ok=True because bots might be forbidden
-    page_resp = Req(url, reason="main page", fail_ok=True).get()
+    page_resp = await Req(url, reason="main page", fail_ok=True).get()
     if page_resp is not None:
         soup = page_resp.soup()
         for item in soup.find_all("meta", {"name": "author", "content": True}):
@@ -119,7 +116,7 @@ def get_human_json(url: str) -> dict | None:
     req = Req(hjurl, base=url, reason="human.json")
     if guessed:
         req.ok_errors = {403, 404, 406, 410}
-    if (resp := req.get()) is None:
+    if (resp := await req.get()) is None:
         return None
 
     resp.save(dirname="data")
@@ -138,31 +135,44 @@ def error(msg):
     print(f"** Error {msg}", file=sys.stderr)
 
 
-def main():
-    domains_to_do = {START}
-    domains_done = set()
-    while domains_to_do:
-        domain = domains_to_do.pop()
-        domains_done.add(domain)
-        try:
-            hj = get_human_json(domain)
-            if hj is None:
-                continue
-        except Exception as e:
-            error(f"getting human.json from {domain}: {e}")
-            continue
+async def worker(url_queue, urls_done):
+    while True:
+        url = await url_queue.get()
 
+        urls_done.add(url)
+        hj = None
         try:
-            print(f"Got {len(hj['vouches'])} from {domain}")
-            for vouch in hj["vouches"]:
-                url = vouch["url"].strip("/")
-                if url not in domains_done:
-                    domains_to_do.add(url)
+            hj = await get_human_json(url)
         except Exception as e:
-            error(f"reading human.json: {e}")
+            error(f"getting human.json from {url}: {e}")
 
-    print(f"\n\nFound {len(domains_done)} domains:")
-    print("\n".join(sorted(domains_done)))
+        if hj is not None:
+            try:
+                print(f"Got {len(hj['vouches'])} from {url}")
+                for vouch in hj["vouches"]:
+                    url = vouch["url"].strip("/")
+                    if url not in urls_done:
+                        await url_queue.put(url)
+            except Exception as e:
+                error(f"reading human.json: {e}")
+
+        url_queue.task_done()
+
+
+async def main(start_url: str, n_workers: int):
+    url_queue = asyncio.Queue()
+    await url_queue.put(start_url)
+    urls_done = set()
+
+    workers = [
+        asyncio.create_task(worker(url_queue, urls_done)) for _ in range(n_workers)
+    ]
+    await url_queue.join()
+    for w in workers:
+        w.cancel()
+
+    print(f"\n\nFound {len(urls_done)} urls:")
+    print("\n".join(sorted(urls_done)))
 
     print(f"\nFound {len(people)} people:")
     print("\n".join(sorted(people)))
@@ -172,4 +182,5 @@ def main():
     print(f"{sum(human_jsons.values()):4d}  total")
 
 
-main()
+if __name__ == "__main__":
+    asyncio.run(main("https://sethmlarson.dev", 20))
