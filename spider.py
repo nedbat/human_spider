@@ -139,7 +139,6 @@ async def worker(url_queue, urls_done):
     while True:
         url = await url_queue.get()
 
-        urls_done.add(url)
         hj = None
         try:
             hj = await get_human_json(url)
@@ -150,9 +149,12 @@ async def worker(url_queue, urls_done):
             try:
                 print(f"Got {len(hj['vouches'])} from {url}")
                 for vouch in hj["vouches"]:
-                    url = vouch["url"].strip("/")
-                    if url not in urls_done:
-                        await url_queue.put(url)
+                    vurl = vouch["url"].rstrip("/")
+                    if vurl in urls_done:
+                        urls_done[vurl].append(url)
+                    else:
+                        urls_done[vurl] = [url]
+                        await url_queue.put(vurl)
             except Exception as e:
                 error(f"reading human.json: {e}")
 
@@ -162,7 +164,7 @@ async def worker(url_queue, urls_done):
 async def main(start_url: str, n_workers: int):
     url_queue = asyncio.Queue()
     await url_queue.put(start_url)
-    urls_done = set()
+    urls_done = {start_url: []}
 
     workers = [
         asyncio.create_task(worker(url_queue, urls_done)) for _ in range(n_workers)
@@ -172,7 +174,7 @@ async def main(start_url: str, n_workers: int):
         w.cancel()
 
     print(f"\n\nFound {len(urls_done)} urls:")
-    print("\n".join(sorted(urls_done)))
+    print("\n".join(str(x) for x in sorted(urls_done.items())))
 
     print(f"\nFound {len(people)} people:")
     print("\n".join(sorted(people)))
