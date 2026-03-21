@@ -88,6 +88,20 @@ sites: dict[str, Site] = {}
 people = collections.defaultdict(list)
 
 
+def extract_facts_from_jsonld(url: str, jsonld: dict) -> None:
+    if (at_type := jsonld.get("@type")):
+        if at_type == "Person":
+            name = jsonld.get("name", "")
+            if name:
+                people[name].append(f"Person on {url}")
+        author = jsonld.get("author", {}).get("name", "")
+        if author:
+            people[author].append(f"{at_type} author on {url}")
+    if (graph := jsonld.get("@graph")):
+        for subld in graph:
+            extract_facts_from_jsonld(url, subld)
+
+
 async def get_human_json(url: str) -> dict | None:
     # fail_ok=True because bots might be forbidden
     page_resp = await Req(url, reason="main page", fail_ok=True).get()
@@ -95,7 +109,6 @@ async def get_human_json(url: str) -> dict | None:
         soup = page_resp.soup()
         for item in soup.find_all("meta", {"name": "author", "content": True}):
             if author := item["content"]:
-                print(f"{url} author: {author!r}")
                 sites[url].author = author
                 people[author].append(f"Author of {url}")
 
@@ -106,19 +119,8 @@ async def get_human_json(url: str) -> dict | None:
             jsonld = json.loads(jsonld_str)
             with Path("data", filename_for_url(url) + f"_ldjson{i}.json").open("w") as f:
                 json.dump(jsonld, f, indent=4)
-            at_type = jsonld.get("@type")
-            if at_type:
-                msg = f"{url} has {len(jsonld_str)} chars of {at_type!r} JSON-LD"
-                if at_type == "Person":
-                    name = jsonld.get("name", "")
-                    if name:
-                        msg += f", name is {name!r}"
-                        people[name].append(f"A person on {url}")
-                author = jsonld.get("author", {}).get("name", "")
-                if author:
-                    msg += f", with author: {author!r}"
-                    people[author].append(f"Mentioned as a {at_type} author on {url}")
-                print(msg)
+            extract_facts_from_jsonld(url, jsonld)
+
         url = page_resp.url
     else:
         soup = None
