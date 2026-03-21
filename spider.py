@@ -7,6 +7,7 @@
 # ///
 
 import asyncio
+import collections
 import json
 import mimetypes
 import re
@@ -20,8 +21,11 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 
-people = set()
 human_jsons = {}
+
+
+def filename_for_url(url: str) -> str:
+    return re.sub(r"[^\w]", "_", url.partition("://")[-1])
 
 
 @dataclass
@@ -40,7 +44,7 @@ class Resp:
         return json.loads(self.content)
 
     def save(self, *, dirname: str = "") -> None:
-        filename = re.sub(r"[^\w]", "_", self.url.partition("://")[-1])
+        filename = filename_for_url(self.url)
         content_type = (
             self.resp.headers.get("content-type", "").partition(";")[0].strip()
         )
@@ -72,6 +76,18 @@ class Req:
                 return Resp(aresp, await aresp.content.read())
 
 
+@dataclass
+class Site:
+    vouchers: list[str]
+    author: str = ""
+
+
+sites: dict[str, Site] = {}
+
+
+people = collections.defaultdict(list)
+
+
 async def get_human_json(url: str) -> dict | None:
     # fail_ok=True because bots might be forbidden
     page_resp = await Req(url, reason="main page", fail_ok=True).get()
@@ -80,11 +96,16 @@ async def get_human_json(url: str) -> dict | None:
         for item in soup.find_all("meta", {"name": "author", "content": True}):
             if author := item["content"]:
                 print(f"{url} author: {author!r}")
-                people.add(author)
+                sites[url].author = author
+                people[author].append(f"Author of {url}")
 
-        for item in soup.find_all("script", {"type": "application/ld+json"}):
+        for i, item in enumerate(
+            soup.find_all("script", {"type": "application/ld+json"})
+        ):
             jsonld_str = item.string
             jsonld = json.loads(jsonld_str)
+            with Path("data", filename_for_url(url) + f"_ldjson{i}.json").open("w") as f:
+                json.dump(jsonld, f, indent=4)
             at_type = jsonld.get("@type")
             if at_type:
                 msg = f"{url} has {len(jsonld_str)} chars of {at_type!r} JSON-LD"
@@ -92,11 +113,11 @@ async def get_human_json(url: str) -> dict | None:
                     name = jsonld.get("name", "")
                     if name:
                         msg += f", name is {name!r}"
-                        people.add(name)
+                        people[name].append(f"A person on {url}")
                 author = jsonld.get("author", {}).get("name", "")
                 if author:
                     msg += f", with author: {author!r}"
-                    people.add(author)
+                    people[author].append(f"Mentioned as a {at_type} author on {url}")
                 print(msg)
         url = page_resp.url
     else:
@@ -135,7 +156,7 @@ def error(msg):
     print(f"** Error {msg}", file=sys.stderr)
 
 
-async def worker(url_queue, urls_done):
+async def worker(url_queue):
     while True:
         url = await url_queue.get()
 
@@ -150,10 +171,10 @@ async def worker(url_queue, urls_done):
                 print(f"Got {len(hj['vouches'])} from {url}")
                 for vouch in hj["vouches"]:
                     vurl = vouch["url"].rstrip("/")
-                    if vurl in urls_done:
-                        urls_done[vurl].append(url)
+                    if vurl in sites:
+                        sites[vurl].vouchers.append(url)
                     else:
-                        urls_done[vurl] = [url]
+                        sites[vurl] = Site(vouchers=[url])
                         await url_queue.put(vurl)
             except Exception as e:
                 error(f"reading human.json: {e}")
@@ -163,21 +184,27 @@ async def worker(url_queue, urls_done):
 
 async def main(start_url: str, n_workers: int):
     url_queue = asyncio.Queue()
-    await url_queue.put(start_url)
-    urls_done = {start_url: []}
 
-    workers = [
-        asyncio.create_task(worker(url_queue, urls_done)) for _ in range(n_workers)
-    ]
+    sites[start_url] = Site(vouchers=[])
+    await url_queue.put(start_url)
+
+    workers = [asyncio.create_task(worker(url_queue)) for _ in range(n_workers)]
     await url_queue.join()
     for w in workers:
         w.cancel()
 
-    print(f"\n\nFound {len(urls_done)} urls:")
-    print("\n".join(str(x) for x in sorted(urls_done.items())))
+    print(f"\n\nFound {len(sites)} sites:")
+    for url, site in sorted(sites.items()):
+        print(url)
+        print(f"    {len(site.vouchers)} vouchers")
+        if site.author:
+            print(f"    Author: {site.author}")
 
     print(f"\nFound {len(people)} people:")
-    print("\n".join(sorted(people)))
+    for name, person in sorted(people.items()):
+        print(name)
+        for fact in sorted(set(person)):
+            print(f"    {fact}")
 
     print(f"\nFound {len(human_jsons)} human.json files:")
     print("\n".join(f"{n:4d}: {u}" for u, n in sorted(human_jsons.items())))
