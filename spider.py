@@ -67,7 +67,10 @@ class Req:
         else:
             url = self.url
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10, allow_redirects=True) as aresp:
+            headers = {
+                "User-Agent": "nedbat's human.json crawler",
+            }
+            async with session.get(url, timeout=10, headers=headers) as aresp:
                 if aresp.status != 200 and self.fail_ok:
                     return None
                 if aresp.status in self.ok_errors:
