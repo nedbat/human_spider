@@ -169,7 +169,7 @@ async def worker(url_queue):
         try:
             hj = await get_human_json(url)
         except Exception as e:
-            error(f"getting human.json from {url}: {e}")
+            error(f"getting human.json from {url}: {e.__class__.__name__}: {e}")
 
         if hj is not None:
             try:
