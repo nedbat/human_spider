@@ -217,4 +217,4 @@ async def main(start_url: str, n_workers: int):
 
 
 if __name__ == "__main__":
-    asyncio.run(main("https://sethmlarson.dev", 20))
+    asyncio.run(main("https://nedbatchelder.com", 20))
