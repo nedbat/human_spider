@@ -67,6 +67,8 @@ class Req:
             url = urllib.parse.urljoin(self.base, self.url)
         else:
             url = self.url
+        if ":" not in url:
+            url = f"https://{url}"
         async with aiohttp.ClientSession() as session:
             headers = {
                 "User-Agent": "nedbat's human.json crawler",
