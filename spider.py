@@ -12,6 +12,7 @@ import json
 import mimetypes
 import re
 import sys
+import traceback
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,8 +98,10 @@ def extract_facts_from_jsonld(url: str, jsonld: dict) -> None:
             name = jsonld.get("name", "")
             if name:
                 people[name].append(f"Person on {url}")
-        author = jsonld.get("author", {}).get("name", "")
-        if author:
+        author = jsonld.get("author", {})
+        if isinstance(author, dict):
+            author = author.get("name", "")
+        if isinstance(author, str) and author:
             people[author].append(f"{at_type} author on {url}")
     if (graph := jsonld.get("@graph")):
         for subld in graph:
@@ -170,6 +173,8 @@ async def worker(url_queue):
             hj = await get_human_json(url)
         except Exception as e:
             error(f"getting human.json from {url}: {e.__class__.__name__}: {e}")
+            # if "some erroring url" in url:
+            #     print(traceback.format_exc(), file=sys.stderr)
 
         if hj is not None:
             try:
