@@ -1,7 +1,7 @@
 .PHONY: spider quality
 
 spider:
-	grep Found out.txt
+	@-grep Found out.txt
 	uv run spider.py > out.txt
 	grep Found out.txt
 

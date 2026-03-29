@@ -10,7 +10,6 @@ import asyncio
 import collections
 import json
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 from myhttp import fix_url, slug_for_url, Req
@@ -18,10 +17,17 @@ from myhttp import fix_url, slug_for_url, Req
 human_jsons = {}
 
 
-@dataclass
 class Site:
-    vouchers: list[str]
-    author: str = ""
+    def __init__(
+        self,
+        url: str,
+    ) -> None:
+        self.url = url
+        self.vouchers = []
+        self.author = ""
+
+    def __str__(self) -> str:
+        return self.url
 
 
 sites: dict[str, Site] = {}
@@ -106,48 +112,50 @@ def error(msg):
     print(f"** Error {msg}", file=sys.stderr)
 
 
-async def worker(url_queue):
+async def worker(site_queue: asyncio.Queue[Site]):
     while True:
-        url = await url_queue.get()
+        site = await site_queue.get()
 
         hj = None
         try:
-            hj = await get_human_json(url)
+            hj = await get_human_json(site.url)
         except Exception as e:
-            error(f"getting human.json from {url}: {e.__class__.__name__}: {e}")
+            error(f"getting human.json from {site}: {e.__class__.__name__}: {e}")
             # if "some erroring url" in url:
+            #     import traceback
             #     print(traceback.format_exc(), file=sys.stderr)
 
         if hj is not None:
             try:
-                print(f"Got {len(hj['vouches'])} from {url}")
+                print(f"Got {len(hj['vouches'])} from {site}")
                 for vouch in hj["vouches"]:
                     vurl = fix_url(vouch["url"])
                     if vurl in sites:
-                        sites[vurl].vouchers.append(url)
+                        sites[vurl].vouchers.append(site.url)
                     else:
-                        sites[vurl] = Site(vouchers=[url])
-                        await url_queue.put(vurl)
+                        sites[vurl] = vsite = Site(vurl)
+                        vsite.vouchers.append(site.url)
+                        await site_queue.put(vsite)
             except Exception as e:
                 error(f"reading human.json: {e}")
 
-        url_queue.task_done()
+        site_queue.task_done()
 
 
 async def main(start_url: str, n_workers: int):
-    url_queue = asyncio.Queue()
+    site_queue: asyncio.Queue[Site] = asyncio.Queue()
 
-    sites[start_url] = Site(vouchers=[])
-    await url_queue.put(start_url)
+    sites[start_url] = site = Site(start_url)
+    await site_queue.put(site)
 
-    workers = [asyncio.create_task(worker(url_queue)) for _ in range(n_workers)]
-    await url_queue.join()
+    workers = [asyncio.create_task(worker(site_queue)) for _ in range(n_workers)]
+    await site_queue.join()
     for w in workers:
         w.cancel()
 
     print(f"\n\nFound {len(sites)} sites:")
     for url, site in sorted(sites.items()):
-        print(url)
+        print(site.url)
         print(f"    {len(site.vouchers)} vouchers")
         if site.author:
             print(f"    Author: {site.author}")
