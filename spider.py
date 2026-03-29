@@ -85,7 +85,9 @@ def extract_facts_from_jsonld(site: Site, jsonld: dict) -> None:
 
 
 async def read_robots_txt(site: Site) -> None:
-    resp = await Req("/robots.txt", base=site.url, reason="robots.txt", fail_ok=True).get()
+    resp = await Req(
+        "/robots.txt", base=site.url, reason="robots.txt", fail_ok=True
+    ).get()
     if resp is not None:
         site.robots_txt = True
         resp.save(dirname="data")
@@ -99,7 +101,9 @@ def read_meta_tags(site: Site, resp: Resp) -> None:
 
 
 def read_jsonld(site: Site, resp: Resp) -> None:
-    for i, item in enumerate(resp.soup().find_all("script", {"type": "application/ld+json"})):
+    for i, item in enumerate(
+        resp.soup().find_all("script", {"type": "application/ld+json"})
+    ):
         jsonld_str = item.string
         filename = slug_for_url(site.url) + f"_ldjson{i}.json"
         with Path("data", filename).open("w") as f:
@@ -126,7 +130,9 @@ async def get_site_data(sites: Sites, site: Site) -> None:
     guessed = False
     hjurl = ""
     if page_resp is not None:
-        for item in page_resp.soup().find_all("link", {"rel": "human-json", "href": True}):
+        for item in page_resp.soup().find_all(
+            "link", {"rel": "human-json", "href": True}
+        ):
             hjurl = item["href"]
             print(f"{site} points to {hjurl}")
             break
