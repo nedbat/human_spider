@@ -95,7 +95,7 @@ people = collections.defaultdict(list)
 
 
 def extract_facts_from_jsonld(url: str, jsonld: dict) -> None:
-    if (at_type := jsonld.get("@type")):
+    if at_type := jsonld.get("@type"):
         if at_type == "Person":
             name = jsonld.get("name", "")
             if name:
@@ -105,7 +105,7 @@ def extract_facts_from_jsonld(url: str, jsonld: dict) -> None:
             author = author.get("name", "")
         if isinstance(author, str) and author:
             people[author].append(f"{at_type} author on {url}")
-    if (graph := jsonld.get("@graph")):
+    if graph := jsonld.get("@graph"):
         for subld in graph:
             extract_facts_from_jsonld(url, subld)
 
@@ -124,10 +124,15 @@ async def get_human_json(url: str) -> dict | None:
             soup.find_all("script", {"type": "application/ld+json"})
         ):
             jsonld_str = item.string
-            jsonld = json.loads(jsonld_str)
-            with Path("data", filename_for_url(url) + f"_ldjson{i}.json").open("w") as f:
-                json.dump(jsonld, f, indent=4)
-            extract_facts_from_jsonld(url, jsonld)
+            Path("data", filename_for_url(url) + f"_ldjson{i}.json").write_text(
+                jsonld_str
+            )
+            try:
+                jsonld = json.loads(jsonld_str)
+            except Exception as e:
+                error(f"parsing jsonld from {url}: {e.__class__.__name__}: {e}")
+            else:
+                extract_facts_from_jsonld(url, jsonld)
 
         url = page_resp.url
     else:
