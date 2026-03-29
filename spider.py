@@ -13,7 +13,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from myhttp import filename_for_url, Req
+from myhttp import fix_url, slug_for_url, Req
 
 human_jsons = {}
 
@@ -60,9 +60,8 @@ async def get_human_json(url: str) -> dict | None:
             soup.find_all("script", {"type": "application/ld+json"})
         ):
             jsonld_str = item.string
-            Path("data", filename_for_url(url) + f"_ldjson{i}.json").write_text(
-                jsonld_str
-            )
+            with Path("data", slug_for_url(url) + f"_ldjson{i}.json").open("w") as f:
+                f.write(jsonld_str)
             try:
                 jsonld = json.loads(jsonld_str)
             except Exception as e:
@@ -123,7 +122,7 @@ async def worker(url_queue):
             try:
                 print(f"Got {len(hj['vouches'])} from {url}")
                 for vouch in hj["vouches"]:
-                    vurl = vouch["url"].rstrip("/")
+                    vurl = fix_url(vouch["url"])
                     if vurl in sites:
                         sites[vurl].vouchers.append(url)
                     else:

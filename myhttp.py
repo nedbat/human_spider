@@ -10,8 +10,15 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 
-def filename_for_url(url: str) -> str:
+def slug_for_url(url: str) -> str:
     return re.sub(r"[^\w]", "_", url.partition("://")[-1])
+
+
+def fix_url(url: str) -> str:
+    url = url.rstrip("/")
+    if ":" not in url:
+        url = f"https://{url}"
+    return url
 
 
 @dataclass
@@ -30,7 +37,7 @@ class Resp:
         return json.loads(self.content)
 
     def save(self, *, dirname: str = "") -> None:
-        filename = filename_for_url(self.url)
+        filename = slug_for_url(self.url)
         content_type = (
             self.resp.headers.get("content-type", "").partition(";")[0].strip()
         )
@@ -52,8 +59,7 @@ class Req:
             url = urllib.parse.urljoin(self.base, self.url)
         else:
             url = self.url
-        if ":" not in url:
-            url = f"https://{url}"
+        url = fix_url(url)
         async with aiohttp.ClientSession() as session:
             headers = {
                 "User-Agent": "nedbat's human.json crawler",
