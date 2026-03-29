@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Iterator
 
-from myhttp import fix_url, slug_for_url, Req
+from myhttp import fix_url, slug_for_url, Req, Resp
 
 human_jsons = {}
 
@@ -81,39 +81,40 @@ def extract_facts_from_jsonld(site: Site, jsonld: dict) -> None:
             extract_facts_from_jsonld(site, subld)
 
 
+def read_meta_tags(site: Site, resp: Resp) -> None:
+    for item in resp.soup().find_all("meta", {"name": "author", "content": True}):
+        if author := item["content"]:
+            site.author = author
+            people[author].append(f"Author of {site}")
+
+
+def read_jsonld(site: Site, resp: Resp) -> None:
+    for i, item in enumerate(resp.soup().find_all("script", {"type": "application/ld+json"})):
+        jsonld_str = item.string
+        filename = slug_for_url(site.url) + f"_ldjson{i}.json"
+        with Path("data", filename).open("w") as f:
+            f.write(jsonld_str)
+        try:
+            jsonld = json.loads(jsonld_str)
+        except Exception as e:
+            error(f"parsing jsonld from {site}: {e.__class__.__name__}: {e}")
+        else:
+            extract_facts_from_jsonld(site, jsonld)
+
+
 async def get_site_data(sites: Sites, site: Site) -> None:
     # fail_ok=True because bots might be forbidden
     page_resp = await Req(site.url, reason="main page", fail_ok=True).get()
     if page_resp is not None:
-        soup = page_resp.soup()
-        for item in soup.find_all("meta", {"name": "author", "content": True}):
-            if author := item["content"]:
-                site.author = author
-                people[author].append(f"Author of {site}")
-
-        for i, item in enumerate(
-            soup.find_all("script", {"type": "application/ld+json"})
-        ):
-            jsonld_str = item.string
-            filename = slug_for_url(site.url) + f"_ldjson{i}.json"
-            with Path("data", filename).open("w") as f:
-                f.write(jsonld_str)
-            try:
-                jsonld = json.loads(jsonld_str)
-            except Exception as e:
-                error(f"parsing jsonld from {site}: {e.__class__.__name__}: {e}")
-            else:
-                extract_facts_from_jsonld(site, jsonld)
-
+        read_meta_tags(site, page_resp)
+        read_jsonld(site, page_resp)
         site.url = page_resp.url
         sites.by_url[site.url] = site
-    else:
-        soup = None
 
     guessed = False
     hjurl = ""
-    if soup is not None:
-        for item in soup.find_all("link", {"rel": "human-json", "href": True}):
+    if page_resp is not None:
+        for item in page_resp.soup().find_all("link", {"rel": "human-json", "href": True}):
             hjurl = item["href"]
             print(f"{site} points to {hjurl}")
             break

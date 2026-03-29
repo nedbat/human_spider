@@ -4,7 +4,7 @@ import re
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Collection
+from typing import Any, Collection
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -25,9 +25,12 @@ def fix_url(url: str) -> str:
 class Resp:
     resp: aiohttp.ClientResponse
     content: bytes
+    _soup: Any = None
 
     def soup(self):
-        return BeautifulSoup(self.content, "html.parser")
+        if self._soup is None:
+            self._soup = BeautifulSoup(self.content, "html.parser")
+        return self._soup
 
     @property
     def url(self) -> str:
