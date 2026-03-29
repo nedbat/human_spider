@@ -24,6 +24,7 @@ class Site:
         self.vouchers: set[str] = set()
         self.author = ""
         self.human_json: str | None = None
+        self.robots_txt: bool = False
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
@@ -38,6 +39,8 @@ class Site:
             print(f"    Author: {self.author}")
         if self.human_json:
             print(f"    human.json: {self.human_json}")
+        if self.robots_txt:
+            print("    has robots.txt")
 
 
 class Sites:
@@ -81,6 +84,13 @@ def extract_facts_from_jsonld(site: Site, jsonld: dict) -> None:
             extract_facts_from_jsonld(site, subld)
 
 
+async def read_robots_txt(site: Site) -> None:
+    resp = await Req("/robots.txt", base=site.url, reason="robots.txt", fail_ok=True).get()
+    if resp is not None:
+        site.robots_txt = True
+        resp.save(dirname="data")
+
+
 def read_meta_tags(site: Site, resp: Resp) -> None:
     for item in resp.soup().find_all("meta", {"name": "author", "content": True}):
         if author := item["content"]:
@@ -103,6 +113,8 @@ def read_jsonld(site: Site, resp: Resp) -> None:
 
 
 async def get_site_data(sites: Sites, site: Site) -> None:
+    await read_robots_txt(site)
+
     # fail_ok=True because bots might be forbidden
     page_resp = await Req(site.url, reason="main page", fail_ok=True).get()
     if page_resp is not None:
