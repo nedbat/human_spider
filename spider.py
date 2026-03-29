@@ -21,7 +21,7 @@ human_jsons = {}
 class Site:
     def __init__(self, url: str) -> None:
         self.url = url
-        self.vouchers: list[str] = []
+        self.vouchers: set[str] = set()
         self.author = ""
 
     def __str__(self) -> str:
@@ -132,7 +132,7 @@ async def get_site_data(sites: Sites, site: Site) -> None:
         for vouch in hj["vouches"]:
             vurl = fix_url(vouch["url"])
             vsite = await sites.for_url(vurl)
-            vsite.vouchers.append(site.url)
+            vsite.vouchers.add(site.url)
     except Exception as e:
         error(f"reading human.json: {e}")
 
