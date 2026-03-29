@@ -7,4 +7,4 @@ spider:
 
 quality:
 	uvx ruff check --fix *.py
-	uvx ty check *.py
+	uvx mypy --install-types --non-interactive *.py
