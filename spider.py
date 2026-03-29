@@ -11,7 +11,7 @@ import collections
 import json
 import sys
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 from myhttp import fix_url, slug_for_url, Req, Resp
 
@@ -25,6 +25,7 @@ class Site:
         self.author = ""
         self.human_json: str | None = None
         self.robots_txt: bool = False
+        self.wander_js: bool = False
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
@@ -41,6 +42,8 @@ class Site:
             print(f"    human.json: {self.human_json}")
         if self.robots_txt:
             print("    has robots.txt")
+        if self.wander_js:
+            print("    has wander.js")
 
 
 class Sites:
@@ -85,9 +88,7 @@ def extract_facts_from_jsonld(site: Site, jsonld: dict) -> None:
 
 
 async def read_robots_txt(site: Site) -> None:
-    resp = await Req(
-        "/robots.txt", base=site.url, reason="robots.txt", fail_ok=True
-    ).get()
+    resp = await Req("/robots.txt", base=site.url, fail_ok=True).get()
     if resp is not None:
         site.robots_txt = True
         resp.save(dirname="data")
@@ -116,16 +117,25 @@ def read_jsonld(site: Site, resp: Resp) -> None:
             extract_facts_from_jsonld(site, jsonld)
 
 
+async def read_wanderjs(site: Site) -> None:
+    resp = await Req("/wander/wander.js", base=site.url, fail_ok=True).get()
+    if resp is not None and resp.content_type().endswith("/javascript"):
+        site.wander_js = True
+        resp.save(dirname="data")
+
+
 async def get_site_data(sites: Sites, site: Site) -> None:
     await read_robots_txt(site)
 
     # fail_ok=True because bots might be forbidden
-    page_resp = await Req(site.url, reason="main page", fail_ok=True).get()
+    page_resp = await Req(site.url, fail_ok=True).get()
     if page_resp is not None:
         read_meta_tags(site, page_resp)
         read_jsonld(site, page_resp)
         site.url = page_resp.url
         sites.by_url[site.url] = site
+
+    await read_wanderjs(site)
 
     guessed = False
     hjurl = ""
@@ -140,7 +150,7 @@ async def get_site_data(sites: Sites, site: Site) -> None:
         hjurl = "/human.json"
         guessed = True
 
-    req = Req(hjurl, base=site.url, reason="human.json")
+    req = Req(hjurl, base=site.url)
     if guessed:
         req.ok_errors = {403, 404, 406, 410}
     if (resp := await req.get()) is None:
@@ -186,9 +196,10 @@ async def worker(sites: Sites):
         sites.queue.task_done()
 
 
-async def main(start_url: str, n_workers: int):
+async def main(start_urls: Iterable[str], n_workers: int):
     sites = Sites()
-    await sites.for_url(start_url)
+    for url in start_urls:
+        await sites.for_url(url)
     workers = [asyncio.create_task(worker(sites)) for _ in range(n_workers)]
     await sites.queue.join()
     for w in workers:
@@ -210,4 +221,8 @@ async def main(start_url: str, n_workers: int):
 
 
 if __name__ == "__main__":
-    asyncio.run(main("https://nedbatchelder.com", 20))
+    urls = [
+        "https://nedbatchelder.com",
+        "https://susam.net",
+    ]
+    asyncio.run(main(urls, 20))

@@ -39,12 +39,17 @@ class Resp:
     def json(self) -> dict:
         return json.loads(self.content)
 
+    def content_type(self) -> str:
+        return self.resp.headers.get("content-type", "").partition(";")[0].strip()
+
     def save(self, *, dirname: str = "") -> None:
         filename = slug_for_url(self.url)
-        content_type = (
-            self.resp.headers.get("content-type", "").partition(";")[0].strip()
-        )
-        ext = mimetypes.guess_extension(content_type) or ".dat"
+        ext = mimetypes.guess_extension(self.content_type())
+        if ext is None:
+            if (m := re.search(r"\.\w+$", self.url)):
+                ext = m.group(0)
+        if ext is None:
+            ext = ".dat"
         with Path(dirname, f"{filename}{ext}").open("wb") as f:
             f.write(self.content)
 
@@ -55,7 +60,6 @@ class Req:
     base: str = ""
     fail_ok: bool = False
     ok_errors: Collection[int] = ()
-    reason: str = ""
 
     async def get(self) -> Resp | None:
         if self.base:
