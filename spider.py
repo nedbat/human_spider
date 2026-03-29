@@ -23,12 +23,21 @@ class Site:
         self.url = url
         self.vouchers: set[str] = set()
         self.author = ""
+        self.human_json: str | None = None
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
 
     def __lt__(self, other: "Site") -> bool:
         return self.url < other.url
+
+    def print(self) -> None:
+        print(self.url)
+        print(f"    {len(self.vouchers)} vouchers")
+        if self.author:
+            print(f"    Author: {self.author}")
+        if self.human_json:
+            print(f"    human.json: {self.human_json}")
 
 
 class Sites:
@@ -124,6 +133,7 @@ async def get_site_data(sites: Sites, site: Site) -> None:
             error(f"{hjurl} served HTML")
         return None
 
+    site.human_json = hjurl
     hj = resp.json()
     human_jsons[site.url] = len(hj.get("vouches", []))
 
@@ -157,7 +167,8 @@ async def worker(sites: Sites):
         sites.queue.task_done()
 
 
-async def main(sites: Sites, start_url: str, n_workers: int):
+async def main(start_url: str, n_workers: int):
+    sites = Sites()
     await sites.for_url(start_url)
     workers = [asyncio.create_task(worker(sites)) for _ in range(n_workers)]
     await sites.queue.join()
@@ -166,10 +177,7 @@ async def main(sites: Sites, start_url: str, n_workers: int):
 
     print(f"\n\nFound {len(sites)} sites:")
     for site in sorted(sites):
-        print(site.url)
-        print(f"    {len(site.vouchers)} vouchers")
-        if site.author:
-            print(f"    Author: {site.author}")
+        site.print()
 
     print(f"\nFound {len(people)} people:")
     for name, person in sorted(people.items()):
@@ -183,5 +191,4 @@ async def main(sites: Sites, start_url: str, n_workers: int):
 
 
 if __name__ == "__main__":
-    sites = Sites()
-    asyncio.run(main(sites, "https://nedbatchelder.com", 20))
+    asyncio.run(main("https://nedbatchelder.com", 20))
