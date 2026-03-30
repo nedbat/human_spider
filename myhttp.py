@@ -21,6 +21,11 @@ def fix_url(url: str) -> str:
     return url
 
 
+def root_for_url(url: str) -> str:
+    parts = urllib.parse.urlparse(fix_url(url))
+    return f"{parts.scheme}://{parts.netloc}"
+
+
 @dataclass
 class Resp:
     resp: aiohttp.ClientResponse
@@ -38,6 +43,10 @@ class Resp:
 
     def json(self) -> dict:
         return json.loads(self.content)
+
+    def text(self) -> str:
+        # Assume utf-8, fix it later if we need to
+        return self.content.decode("utf-8")
 
     def content_type(self) -> str:
         return self.resp.headers.get("content-type", "").partition(";")[0].strip()

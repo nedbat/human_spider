@@ -13,9 +13,8 @@ import sys
 from pathlib import Path
 from typing import Iterable, Iterator
 
-from myhttp import fix_url, slug_for_url, Req, Resp
-
-human_jsons = {}
+from myhttp import fix_url, root_for_url, slug_for_url, Req, Resp
+from parse_wander import parse_wander
 
 
 class Site:
@@ -35,7 +34,8 @@ class Site:
 
     def print(self) -> None:
         print(self.url)
-        print(f"    {len(self.vouchers)} vouchers")
+        if self.vouchers:
+            print(f"    {len(self.vouchers)} human vouchers")
         if self.author:
             print(f"    Author: {self.author}")
         if self.human_json:
@@ -69,6 +69,10 @@ class Sites:
 
 
 people = collections.defaultdict(list)
+human_jsons = {}
+wander_consoles = set()
+wander_pages = set()
+
 
 
 def extract_facts_from_jsonld(site: Site, jsonld: dict) -> None:
@@ -117,11 +121,20 @@ def read_jsonld(site: Site, resp: Resp) -> None:
             extract_facts_from_jsonld(site, jsonld)
 
 
-async def read_wanderjs(site: Site) -> None:
+async def read_wanderjs(sites: Sites, site: Site) -> None:
     resp = await Req("/wander/wander.js", base=site.url, fail_ok=True).get()
     if resp is not None and resp.content_type().endswith("/javascript"):
         site.wander_js = True
         resp.save(dirname="data")
+        wander_data = parse_wander(resp.text())
+        for console in wander_data["consoles"]:
+            console = fix_url(console)
+            wander_consoles.add(console)
+            await sites.for_url(root_for_url(console))
+        for page in wander_data["pages"]:
+            page = fix_url(page)
+            wander_pages.add(page)
+            await sites.for_url(root_for_url(page))
 
 
 async def get_site_data(sites: Sites, site: Site) -> None:
@@ -135,7 +148,7 @@ async def get_site_data(sites: Sites, site: Site) -> None:
         site.url = page_resp.url
         sites.by_url[site.url] = site
 
-    await read_wanderjs(site)
+    await read_wanderjs(sites, site)
 
     guessed = False
     hjurl = ""
@@ -144,7 +157,6 @@ async def get_site_data(sites: Sites, site: Site) -> None:
             "link", {"rel": "human-json", "href": True}
         ):
             hjurl = item["href"]
-            print(f"{site} points to {hjurl}")
             break
     if not hjurl:
         hjurl = "/human.json"
@@ -167,7 +179,6 @@ async def get_site_data(sites: Sites, site: Site) -> None:
     human_jsons[site.url] = len(hj.get("vouches", []))
 
     try:
-        print(f"Got {len(hj['vouches'])} from {site}")
         for vouch in hj["vouches"]:
             vurl = fix_url(vouch["url"])
             vsite = await sites.for_url(vurl)
@@ -218,6 +229,11 @@ async def main(start_urls: Iterable[str], n_workers: int):
     print(f"\nFound {len(human_jsons)} human.json files:")
     print("\n".join(f"{n:4d}: {u}" for u, n in sorted(human_jsons.items())))
     print(f"{sum(human_jsons.values()):4d}  total")
+
+    print(f"\nFound {len(wander_consoles)} wander consoles:")
+    print("\n".join(sorted(wander_consoles)))
+    print(f"\nFound {len(wander_pages)} wander pages:")
+    print("\n".join(sorted(wander_pages)))
 
 
 if __name__ == "__main__":
