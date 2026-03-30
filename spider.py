@@ -110,7 +110,7 @@ def read_jsonld(site: Site, resp: Resp) -> None:
         resp.soup().find_all("script", {"type": "application/ld+json"})
     ):
         jsonld_str = item.string
-        filename = slug_for_url(site.url) + f"_ldjson{i}.json"
+        filename = slug_for_url(site.url) + f"_ldjson_{i:03d}.json"
         with Path("data", filename).open("w") as f:
             f.write(jsonld_str)
         try:
