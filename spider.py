@@ -149,13 +149,16 @@ def read_jsonld(site: Site, resp: Resp) -> None:
 
 
 async def read_wanderjs(sites: Sites, site: Site) -> None:
-    req = Req(
-        "/wander/wander.js",
-        base=site.url,
-        fail_ok=True,
-        ok_content_types=["text/javascript", "application/javascript"],
-    )
-    resp = await req.get()
+    for relative in ["/wander/wander.js", "/wander.js"]:
+        req = Req(
+            relative,
+            base=site.url,
+            fail_ok=True,
+            ok_content_types=["text/javascript", "application/javascript"],
+        )
+        resp = await req.get()
+        if resp is not None:
+            break
     if resp is not None:
         site.wander_js = True
         resp.save(dirname="data")
