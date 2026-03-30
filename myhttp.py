@@ -69,6 +69,7 @@ class Req:
     base: str = ""
     fail_ok: bool = False
     ok_errors: Collection[int] = ()
+    ok_content_types: Collection[str] = ()
 
     async def get(self) -> Resp | None:
         if self.base:
@@ -78,12 +79,14 @@ class Req:
         url = fix_url(url)
         async with aiohttp.ClientSession() as session:
             headers = {
-                "User-Agent": "nedbat's human.json crawler",
+                "User-Agent": "nedbat's human website crawler, https://nedbatchelder.com/blog/202603/humanjson",
             }
-            async with session.get(url, timeout=10, headers=headers) as aresp:
-                if aresp.status != 200 and self.fail_ok:
+            async with session.get(url, timeout=10, headers=headers) as resp:
+                if resp.status != 200 and self.fail_ok:
                     return None
-                if aresp.status in self.ok_errors:
+                if resp.status in self.ok_errors:
                     return None
-                aresp.raise_for_status()
-                return Resp(aresp, await aresp.content.read())
+                if self.ok_content_types and resp.content_type not in self.ok_content_types:
+                    return None
+                resp.raise_for_status()
+                return Resp(resp, await resp.content.read())

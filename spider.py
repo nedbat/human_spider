@@ -98,7 +98,13 @@ def extract_facts_from_jsonld(site: Site, jsonld: dict) -> None:
 
 
 async def read_robots_txt(site: Site) -> None:
-    resp = await Req("/robots.txt", base=site.url, fail_ok=True).get()
+    req = Req(
+        "/robots.txt",
+        base=site.url,
+        fail_ok=True,
+        ok_content_types=["text/plain"],
+    )
+    resp = await req.get()
     if resp is not None:
         site.robots_txt = True
         resp.save(dirname="data")
@@ -143,8 +149,14 @@ def read_jsonld(site: Site, resp: Resp) -> None:
 
 
 async def read_wanderjs(sites: Sites, site: Site) -> None:
-    resp = await Req("/wander/wander.js", base=site.url, fail_ok=True).get()
-    if resp is not None and resp.content_type().endswith("/javascript"):
+    req = Req(
+        "/wander/wander.js",
+        base=site.url,
+        fail_ok=True,
+        ok_content_types=["text/javascript", "application/javascript"],
+    )
+    resp = await req.get()
+    if resp is not None:
         site.wander_js = True
         resp.save(dirname="data")
         wander_data = parse_wander(resp.text())
