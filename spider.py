@@ -10,6 +10,7 @@ import asyncio
 import collections
 import json
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -26,6 +27,7 @@ class Site:
         self.robots_txt: bool = False
         self.wander_js: bool = False
         self.fediverse_creator: str | None = None
+        self.rss: set[str] = set()
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
@@ -47,6 +49,8 @@ class Site:
             print("    has robots.txt")
         if self.wander_js:
             print("    has wander.js")
+        for rss in self.rss:
+            print(f"    rss: {rss}")
 
 
 class Sites:
@@ -77,7 +81,6 @@ wander_consoles = set()
 wander_pages = set()
 
 
-
 def extract_facts_from_jsonld(site: Site, jsonld: dict) -> None:
     if at_type := jsonld.get("@type"):
         if at_type == "Person":
@@ -106,9 +109,21 @@ def read_meta_tags(site: Site, resp: Resp) -> None:
         if author := item["content"]:
             site.author = author
             people[author].append(f"Author of {site}")
-    for item in resp.soup().find_all("meta", {"name": "fediverse:creator", "content": True}):
+    for item in resp.soup().find_all(
+        "meta", {"name": "fediverse:creator", "content": True}
+    ):
         if creator := item["content"]:
             site.fediverse_creator = creator
+
+
+def read_rss_links(site: Site, resp: Resp) -> None:
+    for item in resp.soup().find_all(
+        "link", {"rel": "alternate", "type": "application/rss+xml", "href": True}
+    ):
+        if href := item["href"]:
+            if "/comments/" not in href:
+                href = urllib.parse.urljoin(site.url, href)
+                site.rss.add(href)
 
 
 def read_jsonld(site: Site, resp: Resp) -> None:
@@ -150,6 +165,7 @@ async def get_site_data(sites: Sites, site: Site) -> None:
     page_resp = await Req(site.url, fail_ok=True).get()
     if page_resp is not None:
         read_meta_tags(site, page_resp)
+        read_rss_links(site, page_resp)
         read_jsonld(site, page_resp)
         site.url = page_resp.url
         sites.by_url[site.url] = site
@@ -243,6 +259,10 @@ async def main(start_urls: Iterable[str], n_workers: int):
 
     creators = {s.fediverse_creator for s in sites}
     print(f"\nFound {len(creators)} fediverse creators")
+
+    rsses = sum(len(s.rss) for s in sites)
+    print(f"\nFound {rsses} rss feeeds")
+
 
 if __name__ == "__main__":
     urls = [
