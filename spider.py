@@ -201,12 +201,12 @@ async def get_site_data(sites: Sites, site: Site) -> None:
     human_jsons[site.url] = len(hj.get("vouches", []))
 
     try:
-        for vouch in hj["vouches"]:
+        for vouch in hj.get("vouches", []):
             vurl = fix_url(vouch["url"])
             vsite = await sites.for_url(vurl)
             vsite.vouchers.add(site.url)
     except Exception as e:
-        error(f"reading human.json: {e}")
+        error(f"reading human.json from {resp.url}: {e}")
 
 
 def error(msg):
