@@ -25,6 +25,7 @@ class Site:
         self.human_json: str | None = None
         self.robots_txt: bool = False
         self.wander_js: bool = False
+        self.fediverse_creator: str | None = None
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
@@ -38,6 +39,8 @@ class Site:
             print(f"    {len(self.vouchers)} human vouchers")
         if self.author:
             print(f"    Author: {self.author}")
+        if self.fediverse_creator:
+            print(f"    fediverse creator: {self.fediverse_creator}")
         if self.human_json:
             print(f"    human.json: {self.human_json}")
         if self.robots_txt:
@@ -103,6 +106,9 @@ def read_meta_tags(site: Site, resp: Resp) -> None:
         if author := item["content"]:
             site.author = author
             people[author].append(f"Author of {site}")
+    for item in resp.soup().find_all("meta", {"name": "fediverse:creator", "content": True}):
+        if creator := item["content"]:
+            site.fediverse_creator = creator
 
 
 def read_jsonld(site: Site, resp: Resp) -> None:
@@ -235,6 +241,8 @@ async def main(start_urls: Iterable[str], n_workers: int):
     print(f"\nFound {len(wander_pages)} wander pages:")
     print("\n".join(sorted(wander_pages)))
 
+    creators = {s.fediverse_creator for s in sites}
+    print(f"\nFound {len(creators)} fediverse creators")
 
 if __name__ == "__main__":
     urls = [
