@@ -3,16 +3,20 @@
 # dependencies = [
 #   "aiohttp",
 #   "beautifulsoup4",
+#   "demjson3",
 # ]
 # ///
 
 import asyncio
 import collections
 import json
+import re
 import sys
 import urllib.parse
 from pathlib import Path
 from typing import Iterable, Iterator
+
+import demjson3
 
 from myhttp import fix_url, root_for_url, slug_for_url, Req, Resp
 from parse_wander import parse_wander
@@ -28,6 +32,7 @@ class Site:
         self.wander_js: bool = False
         self.fediverse_creator: str | None = None
         self.rss: set[str] = set()
+        self.blogroll: set[str] = set()
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
@@ -51,6 +56,8 @@ class Site:
             print("    has wander.js")
         for rss in self.rss:
             print(f"    rss: {rss}")
+        for roll in self.blogroll:
+            print(f"    blogroll: {roll}")
 
 
 class Sites:
@@ -81,20 +88,26 @@ wander_consoles = set()
 wander_pages = set()
 
 
-def extract_facts_from_jsonld(site: Site, jsonld: dict) -> None:
-    if at_type := jsonld.get("@type"):
-        if at_type == "Person":
-            name = jsonld.get("name", "")
-            if name:
-                people[name].append(f"Person on {site}")
-        author = jsonld.get("author", {})
-        if isinstance(author, dict):
-            author = author.get("name", "")
-        if isinstance(author, str) and author:
-            people[author].append(f"{at_type} author on {site}")
-    if graph := jsonld.get("@graph"):
-        for subld in graph:
-            extract_facts_from_jsonld(site, subld)
+def extract_facts_from_jsonld(site: Site, jsonld: dict | list) -> None:
+    match jsonld:
+        case list():
+            for jld in jsonld:
+                extract_facts_from_jsonld(site, jld)
+
+        case dict():
+            if at_type := jsonld.get("@type"):
+                if at_type == "Person":
+                    name = jsonld.get("name", "")
+                    if name:
+                        people[name].append(f"Person on {site}")
+                author = jsonld.get("author", {})
+                if isinstance(author, dict):
+                    author = author.get("name", "")
+                if isinstance(author, str) and author:
+                    people[author].append(f"{at_type} author on {site}")
+            if graph := jsonld.get("@graph"):
+                for subld in graph:
+                    extract_facts_from_jsonld(site, subld)
 
 
 async def read_robots_txt(site: Site) -> None:
@@ -132,6 +145,42 @@ def read_rss_links(site: Site, resp: Resp) -> None:
                 site.rss.add(href)
 
 
+def read_blogrolls(site: Site, resp: Resp) -> None:
+    for item in resp.soup().find_all(
+        "link", {"rel": "blogroll", "type": "text/xml", "href": True}
+    ):
+        if href := item["href"]:
+            href = urllib.parse.urljoin(site.url, href)
+            site.blogroll.add(href)
+
+
+def fix_json(jstr: str) -> str:
+    """Correct some JSON errors that Schema.org accepts.
+
+    Strings containing newlines get joined together with \\n
+    Scrub control characters. Tabs become spaces.
+
+    Ex: https://validator.schema.org/#url=https%3A%2F%2Fforkingmad.blog
+
+    """
+    jstr = re.sub(r"[\x00-\x08\x0E-\x1F]", "", jstr)
+    jstr = re.sub(r"[\x09\x0D]", " ", jstr)
+    lines = jstr.splitlines(keepends=False)
+    fixed = []
+    partial = ""
+    for line in lines:
+        partial += line
+        quotes = partial.count('"') - partial.count(r"\"")
+        if quotes % 2 == 0:
+            fixed.append(partial)
+            partial = ""
+        else:
+            partial += r"\n"
+    if partial:
+        fixed.append(partial)
+    return "\n".join(fixed)
+
+
 def read_jsonld(site: Site, resp: Resp) -> None:
     for i, item in enumerate(
         resp.soup().find_all("script", {"type": "application/ld+json"})
@@ -141,9 +190,10 @@ def read_jsonld(site: Site, resp: Resp) -> None:
         with Path("data", filename).open("w") as f:
             f.write(jsonld_str)
         try:
-            jsonld = json.loads(jsonld_str)
+            jsonld = demjson3.decode(fix_json(jsonld_str))
         except Exception as e:
             error(f"parsing jsonld from {site}: {e.__class__.__name__}: {e}")
+            print(jsonld_str)
         else:
             extract_facts_from_jsonld(site, jsonld)
 
@@ -181,6 +231,7 @@ async def get_site_data(sites: Sites, site: Site) -> None:
     if page_resp is not None:
         read_meta_tags(site, page_resp)
         read_rss_links(site, page_resp)
+        read_blogrolls(site, page_resp)
         read_jsonld(site, page_resp)
         site.url = page_resp.url
         sites.by_url[site.url] = site
@@ -229,7 +280,7 @@ def error(msg):
     print(f"** Error {msg}", file=sys.stderr)
 
 
-async def worker(sites: Sites):
+async def worker(sites: Sites) -> None:
     while True:
         site = await sites.queue.get()
 
@@ -244,11 +295,30 @@ async def worker(sites: Sites):
         sites.queue.task_done()
 
 
+async def reporter(sites: Sites) -> None:
+    while True:
+        if sites.queue.qsize():
+            print(
+                f"### {sites.queue.qsize()} sites remaining, {len(sites)} total",
+                file=sys.stderr,
+            )
+        await asyncio.sleep(5)
+
+
 async def main(start_urls: Iterable[str], n_workers: int):
     sites = Sites()
     for url in start_urls:
         await sites.for_url(url)
-    workers = [asyncio.create_task(worker(sites)) for _ in range(n_workers)]
+
+    req = Req("https://indieblog.page/export")
+    resp = await req.get()
+    if resp is not None:
+        for feed in resp.json():
+            await sites.for_url(feed["homepage"])
+
+    workers = []
+    workers += [asyncio.create_task(reporter(sites))]
+    workers += [asyncio.create_task(worker(sites)) for _ in range(n_workers)]
     await sites.queue.join()
     for w in workers:
         w.cancel()
@@ -276,7 +346,10 @@ async def main(start_urls: Iterable[str], n_workers: int):
     print(f"\nFound {len(creators)} fediverse creators")
 
     rsses = sum(len(s.rss) for s in sites)
-    print(f"\nFound {rsses} rss feeeds")
+    print(f"\nFound {rsses} rss feeds")
+
+    rolls = sum(len(s.blogroll) for s in sites)
+    print(f"\nFound {rolls} blogrolls")
 
 
 if __name__ == "__main__":
