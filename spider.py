@@ -4,6 +4,7 @@
 #   "aiohttp",
 #   "beautifulsoup4",
 #   "demjson3",
+#   "listparser",
 # ]
 # ///
 
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 import demjson3
+import listparser
 
 from myhttp import fix_url, root_for_url, slug_for_url, Req, Resp
 from parse_wander import parse_wander
@@ -145,13 +147,20 @@ def read_rss_links(site: Site, resp: Resp) -> None:
                 site.rss.add(href)
 
 
-def read_blogrolls(site: Site, resp: Resp) -> None:
+async def read_blogrolls(sites: Sites, site: Site, resp: Resp) -> None:
     for item in resp.soup().find_all(
         "link", {"rel": "blogroll", "type": "text/xml", "href": True}
     ):
         if href := item["href"]:
-            href = urllib.parse.urljoin(site.url, href)
-            site.blogroll.add(href)
+            req = Req(href, base=site.url, fail_ok=True)
+            site.blogroll.add(req.url)
+            resp = await req.get()
+            if resp:
+                opml = listparser.parse(resp.text())
+                for feed in opml.get("feeds", ()):
+                    url = feed.get("url")
+                    if url is not None:
+                        await sites.for_url(root_for_url(url))
 
 
 def fix_json(jstr: str) -> str:
@@ -193,7 +202,6 @@ def read_jsonld(site: Site, resp: Resp) -> None:
             jsonld = demjson3.decode(fix_json(jsonld_str))
         except Exception as e:
             error(f"parsing jsonld from {site}: {e.__class__.__name__}: {e}")
-            print(jsonld_str)
         else:
             extract_facts_from_jsonld(site, jsonld)
 
@@ -231,7 +239,7 @@ async def get_site_data(sites: Sites, site: Site) -> None:
     if page_resp is not None:
         read_meta_tags(site, page_resp)
         read_rss_links(site, page_resp)
-        read_blogrolls(site, page_resp)
+        await read_blogrolls(sites, site, page_resp)
         read_jsonld(site, page_resp)
         site.url = page_resp.url
         sites.by_url[site.url] = site
