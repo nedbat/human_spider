@@ -153,9 +153,9 @@ async def read_blogrolls(sites: Sites, site: Site, resp: Resp) -> None:
         if href := item["href"]:
             req = Req(href, base=site.url, fail_ok=True)
             site.blogroll.add(req.url)
-            resp = await req.get()
-            if resp:
-                opml = listparser.parse(resp.text())
+            roll_resp = await req.get()
+            if roll_resp:
+                opml = listparser.parse(roll_resp.text())
                 for feed in opml.get("feeds", ()):
                     url = feed.get("url")
                     if url is not None:

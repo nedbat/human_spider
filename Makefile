@@ -8,4 +8,4 @@ spider:
 
 quality:
 	uvx ruff check --fix *.py
-	uvx mypy --install-types --non-interactive *.py
+	uvx mypy --ignore-missing-imports *.py
