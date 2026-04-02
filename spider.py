@@ -12,8 +12,9 @@ import asyncio
 import collections
 import sys
 import urllib.parse
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 import demjson3
 import listparser
@@ -37,6 +38,9 @@ class Site:
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
+
+    def __repr__(self) -> str:
+        return f"Site({str(self)!r})"
 
     def __lt__(self, other: "Site") -> bool:
         return self.url < other.url
@@ -85,9 +89,19 @@ class Sites:
         return iter(self.all)
 
 
+class WorkItem:
+    def __init__(self, fn: Callable[..., Coroutine[Any, Any, None]], **kwargs) -> None:
+        self.fn = fn
+        self.kwargs = kwargs
+
+    def __str__(self) -> str:
+        args = ", ".join(f"{k}={v!r}" for k, v in self.kwargs.items())
+        return f"{self.fn.__name__}({args})"
+
+
 class Crawler:
     def __init__(self) -> None:
-        self.queue: asyncio.Queue[Site] = asyncio.Queue()
+        self.queue: asyncio.Queue[WorkItem] = asyncio.Queue()
         self.sites = Sites()
         self.people: dict[str, list[str]] = collections.defaultdict(list)
         self.human_jsons: dict[str, int] = {}
@@ -97,7 +111,8 @@ class Crawler:
     async def site_for_url(self, url: str) -> Site:
         site, is_new = self.sites.for_url(url)
         if is_new:
-            await self.queue.put(site)
+            work = WorkItem(self.get_site_data, site=site)
+            await self.queue.put(work)
         return site
 
     def extract_facts_from_jsonld(self, site: Site, jsonld: dict | list) -> None:
@@ -260,12 +275,12 @@ class Crawler:
 
     async def worker(self) -> None:
         while True:
-            site = await self.queue.get()
+            work = await self.queue.get()
 
             try:
-                await self.get_site_data(site)
+                await work.fn(**work.kwargs)
             except Exception as e:
-                error(f"processing {site}: {e.__class__.__name__}: {e}")
+                error(f"in {work}: {e.__class__.__name__}: {e}")
                 # if 1:#"some erroring url" in url:
                 #     import traceback
                 #     print(traceback.format_exc(), file=sys.stderr)
