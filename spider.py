@@ -83,176 +83,239 @@ class Sites:
         return iter(self.all)
 
 
-people = collections.defaultdict(list)
-human_jsons = {}
-wander_consoles = set()
-wander_pages = set()
+class Crawler:
+    def __init__(self):
+        self.sites = Sites()
+        self.people = collections.defaultdict(list)
+        self.human_jsons = {}
+        self.wander_consoles = set()
+        self.wander_pages = set()
 
+    def extract_facts_from_jsonld(self, site: Site, jsonld: dict | list) -> None:
+        match jsonld:
+            case list():
+                for jld in jsonld:
+                    self.extract_facts_from_jsonld(site, jld)
 
-def extract_facts_from_jsonld(site: Site, jsonld: dict | list) -> None:
-    match jsonld:
-        case list():
-            for jld in jsonld:
-                extract_facts_from_jsonld(site, jld)
+            case dict():
+                if at_type := jsonld.get("@type"):
+                    if at_type == "Person":
+                        name = jsonld.get("name", "")
+                        if name:
+                            self.people[name].append(f"Person on {site}")
+                    author = jsonld.get("author", {})
+                    if isinstance(author, dict):
+                        author = author.get("name", "")
+                    if isinstance(author, str) and author:
+                        self.people[author].append(f"{at_type} author on {site}")
+                if graph := jsonld.get("@graph"):
+                    for subld in graph:
+                        self.extract_facts_from_jsonld(site, subld)
 
-        case dict():
-            if at_type := jsonld.get("@type"):
-                if at_type == "Person":
-                    name = jsonld.get("name", "")
-                    if name:
-                        people[name].append(f"Person on {site}")
-                author = jsonld.get("author", {})
-                if isinstance(author, dict):
-                    author = author.get("name", "")
-                if isinstance(author, str) and author:
-                    people[author].append(f"{at_type} author on {site}")
-            if graph := jsonld.get("@graph"):
-                for subld in graph:
-                    extract_facts_from_jsonld(site, subld)
-
-
-async def read_robots_txt(site: Site) -> None:
-    req = Req(
-        "/robots.txt",
-        base=site.url,
-        fail_ok=True,
-        ok_content_types=["text/plain"],
-    )
-    resp = await req.get()
-    if resp is not None:
-        site.robots_txt = True
-        resp.save(dirname="data")
-
-
-def read_meta_tags(site: Site, resp: Resp) -> None:
-    for item in resp.soup().find_all("meta", {"name": "author", "content": True}):
-        if author := item["content"]:
-            site.author = author
-            people[author].append(f"Author of {site}")
-    for item in resp.soup().find_all(
-        "meta", {"name": "fediverse:creator", "content": True}
-    ):
-        if creator := item["content"]:
-            site.fediverse_creator = creator
-
-
-def read_rss_links(site: Site, resp: Resp) -> None:
-    for item in resp.soup().find_all(
-        "link", {"rel": "alternate", "type": "application/rss+xml", "href": True}
-    ):
-        if href := item["href"]:
-            if "/comments/" not in href:
-                href = urllib.parse.urljoin(site.url, href)
-                site.rss.add(href)
-
-
-async def read_blogrolls(sites: Sites, site: Site, resp: Resp) -> None:
-    for item in resp.soup().find_all(
-        "link", {"rel": "blogroll", "type": "text/xml", "href": True}
-    ):
-        if href := item["href"]:
-            req = Req(href, base=site.url, fail_ok=True)
-            site.blogroll.add(req.url)
-            roll_resp = await req.get()
-            if roll_resp:
-                opml = listparser.parse(roll_resp.text())
-                for feed in opml.get("feeds", ()):
-                    url = feed.get("url")
-                    if url is not None:
-                        await sites.for_url(root_for_url(url))
-
-
-def read_jsonld(site: Site, resp: Resp) -> None:
-    for i, item in enumerate(
-        resp.soup().find_all("script", {"type": "application/ld+json"})
-    ):
-        jsonld_str = item.string
-        filename = slug_for_url(site.url) + f"_ldjson_{i:03d}.json"
-        with Path("data", filename).open("w") as f:
-            f.write(jsonld_str)
-        try:
-            jsonld = demjson3.decode(fix_json(jsonld_str))
-        except Exception as e:
-            error(f"parsing jsonld from {site}: {e.__class__.__name__}: {e}")
-        else:
-            extract_facts_from_jsonld(site, jsonld)
-
-
-async def read_wanderjs(sites: Sites, site: Site) -> None:
-    for relative in ["/wander/wander.js", "/wander.js"]:
+    async def read_robots_txt(self, site: Site) -> None:
         req = Req(
-            relative,
+            "/robots.txt",
             base=site.url,
             fail_ok=True,
-            ok_content_types=["text/javascript", "application/javascript"],
+            ok_content_types=["text/plain"],
         )
         resp = await req.get()
         if resp is not None:
-            break
-    if resp is not None:
-        site.wander_js = True
-        resp.save(dirname="data")
-        wander_data = parse_wander(resp.text())
-        for console in wander_data["consoles"]:
-            console = fix_url(console)
-            wander_consoles.add(console)
-            await sites.for_url(root_for_url(console))
-        for page in wander_data["pages"]:
-            page = fix_url(page)
-            wander_pages.add(page)
-            await sites.for_url(root_for_url(page))
+            site.robots_txt = True
+            resp.save(dirname="data")
 
-
-async def get_site_data(sites: Sites, site: Site) -> None:
-    await read_robots_txt(site)
-
-    # fail_ok=True because bots might be forbidden
-    page_resp = await Req(site.url, fail_ok=True).get()
-    if page_resp is not None:
-        read_meta_tags(site, page_resp)
-        read_rss_links(site, page_resp)
-        await read_blogrolls(sites, site, page_resp)
-        read_jsonld(site, page_resp)
-        site.url = page_resp.url
-        sites.by_url[site.url] = site
-
-    await read_wanderjs(sites, site)
-
-    guessed = False
-    hjurl = ""
-    if page_resp is not None:
-        for item in page_resp.soup().find_all(
-            "link", {"rel": "human-json", "href": True}
+    def read_meta_tags(self, site: Site, resp: Resp) -> None:
+        for item in resp.soup().find_all("meta", {"name": "author", "content": True}):
+            if author := item["content"]:
+                site.author = author
+                self.people[author].append(f"Author of {site}")
+        for item in resp.soup().find_all(
+            "meta", {"name": "fediverse:creator", "content": True}
         ):
-            hjurl = item["href"]
-            break
-    if not hjurl:
-        hjurl = "/human.json"
-        guessed = True
+            if creator := item["content"]:
+                site.fediverse_creator = creator
 
-    req = Req(hjurl, base=site.url)
-    if guessed:
-        req.ok_errors = {403, 404, 406, 410}
-    if (resp := await req.get()) is None:
-        return None
+    def read_rss_links(self, site: Site, resp: Resp) -> None:
+        for item in resp.soup().find_all(
+            "link", {"rel": "alternate", "type": "application/rss+xml", "href": True}
+        ):
+            if href := item["href"]:
+                if "/comments/" not in href:
+                    href = urllib.parse.urljoin(site.url, href)
+                    site.rss.add(href)
 
-    resp.save(dirname="data")
-    if b"<html" in resp.content:
-        if not guessed:
-            error(f"{hjurl} served HTML")
-        return None
+    async def read_blogrolls(self, site: Site, resp: Resp) -> None:
+        for item in resp.soup().find_all(
+            "link", {"rel": "blogroll", "type": "text/xml", "href": True}
+        ):
+            if href := item["href"]:
+                req = Req(href, base=site.url, fail_ok=True)
+                site.blogroll.add(req.url)
+                roll_resp = await req.get()
+                if roll_resp:
+                    opml = listparser.parse(roll_resp.text())
+                    for feed in opml.get("feeds", ()):
+                        url = feed.get("url")
+                        if url is not None:
+                            await self.sites.for_url(root_for_url(url))
 
-    site.human_json = hjurl
-    hj = resp.json()
-    human_jsons[site.url] = len(hj.get("vouches", []))
+    def read_jsonld(self, site: Site, resp: Resp) -> None:
+        for i, item in enumerate(
+            resp.soup().find_all("script", {"type": "application/ld+json"})
+        ):
+            jsonld_str = item.string
+            filename = slug_for_url(site.url) + f"_ldjson_{i:03d}.json"
+            with Path("data", filename).open("w") as f:
+                f.write(jsonld_str)
+            try:
+                jsonld = demjson3.decode(fix_json(jsonld_str))
+            except Exception as e:
+                error(f"parsing jsonld from {site}: {e.__class__.__name__}: {e}")
+            else:
+                self.extract_facts_from_jsonld(site, jsonld)
 
-    try:
-        for vouch in hj.get("vouches", []):
-            vurl = fix_url(vouch["url"])
-            vsite = await sites.for_url(vurl)
-            vsite.vouchers.add(site.url)
-    except Exception as e:
-        error(f"reading human.json from {resp.url}: {e}")
+    async def read_wanderjs(self, site: Site) -> None:
+        for relative in ["/wander/wander.js", "/wander.js"]:
+            req = Req(
+                relative,
+                base=site.url,
+                fail_ok=True,
+                ok_content_types=["text/javascript", "application/javascript"],
+            )
+            resp = await req.get()
+            if resp is not None:
+                break
+        if resp is not None:
+            site.wander_js = True
+            resp.save(dirname="data")
+            wander_data = parse_wander(resp.text())
+            for console in wander_data["consoles"]:
+                console = fix_url(console)
+                self.wander_consoles.add(console)
+                await self.sites.for_url(root_for_url(console))
+            for page in wander_data["pages"]:
+                page = fix_url(page)
+                self.wander_pages.add(page)
+                await self.sites.for_url(root_for_url(page))
+
+    async def get_site_data(self, site: Site) -> None:
+        await self.read_robots_txt(site)
+
+        # fail_ok=True because bots might be forbidden
+        page_resp = await Req(site.url, fail_ok=True).get()
+        if page_resp is not None:
+            self.read_meta_tags(site, page_resp)
+            self.read_rss_links(site, page_resp)
+            await self.read_blogrolls(site, page_resp)
+            self.read_jsonld(site, page_resp)
+            site.url = page_resp.url
+            self.sites.by_url[site.url] = site
+
+        await self.read_wanderjs(site)
+
+        guessed = False
+        hjurl = ""
+        if page_resp is not None:
+            for item in page_resp.soup().find_all(
+                "link", {"rel": "human-json", "href": True}
+            ):
+                hjurl = item["href"]
+                break
+        if not hjurl:
+            hjurl = "/human.json"
+            guessed = True
+
+        req = Req(hjurl, base=site.url)
+        if guessed:
+            req.ok_errors = {403, 404, 406, 410}
+        if (resp := await req.get()) is None:
+            return None
+
+        resp.save(dirname="data")
+        if b"<html" in resp.content:
+            if not guessed:
+                error(f"{hjurl} served HTML")
+            return None
+
+        site.human_json = hjurl
+        hj = resp.json()
+        self.human_jsons[site.url] = len(hj.get("vouches", []))
+
+        try:
+            for vouch in hj.get("vouches", []):
+                vurl = fix_url(vouch["url"])
+                vsite = await self.sites.for_url(vurl)
+                vsite.vouchers.add(site.url)
+        except Exception as e:
+            error(f"reading human.json from {resp.url}: {e}")
+
+    async def worker(self) -> None:
+        while True:
+            site = await self.sites.queue.get()
+
+            try:
+                await self.get_site_data(site)
+            except Exception as e:
+                error(f"processing {site}: {e.__class__.__name__}: {e}")
+                # if 1:#"some erroring url" in url:
+                #     import traceback
+                #     print(traceback.format_exc(), file=sys.stderr)
+
+            self.sites.queue.task_done()
+
+    async def reporter(self) -> None:
+        while True:
+            if self.sites.queue.qsize():
+                print(
+                    f"### {self.sites.queue.qsize()} sites remaining, {len(self.sites)} total",
+                    file=sys.stderr,
+                )
+            await asyncio.sleep(5)
+
+    async def main(self, start_urls: Iterable[str], n_workers: int):
+        for url in start_urls:
+            await self.sites.for_url(url)
+
+        # req = Req("https://indieblog.page/export")
+        # resp = await req.get()
+        # if resp is not None:
+        #     for feed in resp.json():
+        #         await self.sites.for_url(feed["homepage"])
+
+        workers = []
+        workers += [asyncio.create_task(self.reporter())]
+        workers += [asyncio.create_task(self.worker()) for _ in range(n_workers)]
+        await self.sites.queue.join()
+        for w in workers:
+            w.cancel()
+
+        print(f"\n\nFound {len(self.sites)} sites:")
+        for site in sorted(self.sites):
+            site.print()
+
+        print(f"\nFound {len(self.people)} people:")
+        for name, person in sorted(self.people.items()):
+            print(name)
+            for fact in sorted(set(person)):
+                print(f"    {fact}")
+
+        print(f"\nFound {len(self.human_jsons)} human.json files:")
+        print("\n".join(f"{n:4d}: {u}" for u, n in sorted(self.human_jsons.items())))
+        print(f"{sum(self.human_jsons.values()):4d}  total")
+
+        print(f"\nFound {len(self.wander_consoles)} wander consoles:")
+        print("\n".join(sorted(self.wander_consoles)))
+        print(f"\nFound {len(self.wander_pages)} wander pages:")
+        print("\n".join(sorted(self.wander_pages)))
+
+        creators = {s.fediverse_creator for s in self.sites}
+        print(f"\nFound {len(creators)} fediverse creators")
+
+        rsses = sum(len(s.rss) for s in self.sites)
+        print(f"\nFound {rsses} rss feeds")
+
+        rolls = sum(len(s.blogroll) for s in self.sites)
+        print(f"\nFound {rolls} blogrolls")
 
 
 def error(msg):
@@ -260,81 +323,9 @@ def error(msg):
     print(f"** Error {msg}", file=sys.stderr)
 
 
-async def worker(sites: Sites) -> None:
-    while True:
-        site = await sites.queue.get()
-
-        try:
-            await get_site_data(sites, site)
-        except Exception as e:
-            error(f"processing {site}: {e.__class__.__name__}: {e}")
-            # if 1:#"some erroring url" in url:
-            #     import traceback
-            #     print(traceback.format_exc(), file=sys.stderr)
-
-        sites.queue.task_done()
-
-
-async def reporter(sites: Sites) -> None:
-    while True:
-        if sites.queue.qsize():
-            print(
-                f"### {sites.queue.qsize()} sites remaining, {len(sites)} total",
-                file=sys.stderr,
-            )
-        await asyncio.sleep(5)
-
-
-async def main(start_urls: Iterable[str], n_workers: int):
-    sites = Sites()
-    for url in start_urls:
-        await sites.for_url(url)
-
-    req = Req("https://indieblog.page/export")
-    resp = await req.get()
-    if resp is not None:
-        for feed in resp.json():
-            await sites.for_url(feed["homepage"])
-
-    workers = []
-    workers += [asyncio.create_task(reporter(sites))]
-    workers += [asyncio.create_task(worker(sites)) for _ in range(n_workers)]
-    await sites.queue.join()
-    for w in workers:
-        w.cancel()
-
-    print(f"\n\nFound {len(sites)} sites:")
-    for site in sorted(sites):
-        site.print()
-
-    print(f"\nFound {len(people)} people:")
-    for name, person in sorted(people.items()):
-        print(name)
-        for fact in sorted(set(person)):
-            print(f"    {fact}")
-
-    print(f"\nFound {len(human_jsons)} human.json files:")
-    print("\n".join(f"{n:4d}: {u}" for u, n in sorted(human_jsons.items())))
-    print(f"{sum(human_jsons.values()):4d}  total")
-
-    print(f"\nFound {len(wander_consoles)} wander consoles:")
-    print("\n".join(sorted(wander_consoles)))
-    print(f"\nFound {len(wander_pages)} wander pages:")
-    print("\n".join(sorted(wander_pages)))
-
-    creators = {s.fediverse_creator for s in sites}
-    print(f"\nFound {len(creators)} fediverse creators")
-
-    rsses = sum(len(s.rss) for s in sites)
-    print(f"\nFound {rsses} rss feeds")
-
-    rolls = sum(len(s.blogroll) for s in sites)
-    print(f"\nFound {rolls} blogrolls")
-
-
 if __name__ == "__main__":
     urls = [
         "https://nedbatchelder.com",
         "https://susam.net",
     ]
-    asyncio.run(main(urls, 20))
+    asyncio.run(Crawler().main(urls, 20))
