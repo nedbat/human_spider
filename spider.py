@@ -10,8 +10,6 @@
 
 import asyncio
 import collections
-import json
-import re
 import sys
 import urllib.parse
 from pathlib import Path
@@ -21,6 +19,7 @@ import demjson3
 import listparser
 
 from myhttp import fix_url, root_for_url, slug_for_url, Req, Resp
+from myjson import fix_json
 from parse_wander import parse_wander
 
 
@@ -161,33 +160,6 @@ async def read_blogrolls(sites: Sites, site: Site, resp: Resp) -> None:
                     url = feed.get("url")
                     if url is not None:
                         await sites.for_url(root_for_url(url))
-
-
-def fix_json(jstr: str) -> str:
-    """Correct some JSON errors that Schema.org accepts.
-
-    Strings containing newlines get joined together with \\n
-    Scrub control characters. Tabs become spaces.
-
-    Ex: https://validator.schema.org/#url=https%3A%2F%2Fforkingmad.blog
-
-    """
-    jstr = re.sub(r"[\x00-\x08\x0E-\x1F]", "", jstr)
-    jstr = re.sub(r"[\x09\x0D]", " ", jstr)
-    lines = jstr.splitlines(keepends=False)
-    fixed = []
-    partial = ""
-    for line in lines:
-        partial += line
-        quotes = partial.count('"') - partial.count(r"\"")
-        if quotes % 2 == 0:
-            fixed.append(partial)
-            partial = ""
-        else:
-            partial += r"\n"
-    if partial:
-        fixed.append(partial)
-    return "\n".join(fixed)
 
 
 def read_jsonld(site: Site, resp: Resp) -> None:
