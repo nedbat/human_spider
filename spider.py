@@ -194,7 +194,7 @@ class Crawler:
             try:
                 jsonld = demjson3.decode(fix_json(jsonld_str))
             except Exception as e:
-                error(f"parsing jsonld from {site}: {e.__class__.__name__}: {e}")
+                error(f"parsing jsonld from {site}", e)
             else:
                 self.extract_facts_from_jsonld(site, jsonld)
 
@@ -271,7 +271,7 @@ class Crawler:
                 vsite = await self.site_for_url(vurl)
                 vsite.vouchers.add(site.url)
         except Exception as e:
-            error(f"reading human.json from {resp.url}: {e}")
+            error(f"reading human.json from {resp.url}", e)
 
     async def worker(self) -> None:
         while True:
@@ -280,7 +280,7 @@ class Crawler:
             try:
                 await work.fn(**work.kwargs)
             except Exception as e:
-                error(f"in {work}: {e.__class__.__name__}: {e}")
+                error(f"in {work}", e)
                 # if 1:#"some erroring url" in url:
                 #     import traceback
                 #     print(traceback.format_exc(), file=sys.stderr)
@@ -342,9 +342,14 @@ class Crawler:
         print(f"\nFound {rolls} blogrolls")
 
 
-def error(msg: str) -> None:
-    print(f"** Error {msg}")
-    print(f"** Error {msg}", file=sys.stderr)
+def error(msg: str, e: Exception | None = None) -> None:
+    if e is not None:
+        msg += f": {e.__class__.__name__}"
+        if str(e):
+            msg += f": {e}"
+    msg = f"** Error {msg}"
+    print(msg)
+    print(msg, file=sys.stderr)
 
 
 if __name__ == "__main__":
