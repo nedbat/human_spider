@@ -63,18 +63,20 @@ class Site:
 
 class Sites:
     def __init__(self) -> None:
-        self.queue: asyncio.Queue[Site] = asyncio.Queue()
         self.all: list[Site] = []
         self.by_url: dict[str, Site] = {}
 
-    async def for_url(self, url: str) -> Site:
+    def for_url(self, url: str) -> tuple[Site, bool]:
+        """Get a site for a URL, and whether it is new or not."""
         site = self.by_url.get(url)
         if site is None:
             site = Site(url)
-            await self.queue.put(site)
             self.all.append(site)
             self.by_url[url] = site
-        return site
+            is_new = True
+        else:
+            is_new = False
+        return site, is_new
 
     def __len__(self) -> int:
         return len(self.all)
@@ -84,12 +86,19 @@ class Sites:
 
 
 class Crawler:
-    def __init__(self):
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[Site] = asyncio.Queue()
         self.sites = Sites()
-        self.people = collections.defaultdict(list)
-        self.human_jsons = {}
-        self.wander_consoles = set()
-        self.wander_pages = set()
+        self.people: dict[str, list[str]] = collections.defaultdict(list)
+        self.human_jsons: dict[str, int] = {}
+        self.wander_consoles: set[str] = set()
+        self.wander_pages: set[str] = set()
+
+    async def site_for_url(self, url: str) -> Site:
+        site, is_new = self.sites.for_url(url)
+        if is_new:
+            await self.queue.put(site)
+        return site
 
     def extract_facts_from_jsonld(self, site: Site, jsonld: dict | list) -> None:
         match jsonld:
@@ -157,7 +166,7 @@ class Crawler:
                     for feed in opml.get("feeds", ()):
                         url = feed.get("url")
                         if url is not None:
-                            await self.sites.for_url(root_for_url(url))
+                            await self.site_for_url(root_for_url(url))
 
     def read_jsonld(self, site: Site, resp: Resp) -> None:
         for i, item in enumerate(
@@ -192,11 +201,11 @@ class Crawler:
             for console in wander_data["consoles"]:
                 console = fix_url(console)
                 self.wander_consoles.add(console)
-                await self.sites.for_url(root_for_url(console))
+                await self.site_for_url(root_for_url(console))
             for page in wander_data["pages"]:
                 page = fix_url(page)
                 self.wander_pages.add(page)
-                await self.sites.for_url(root_for_url(page))
+                await self.site_for_url(root_for_url(page))
 
     async def get_site_data(self, site: Site) -> None:
         await self.read_robots_txt(site)
@@ -244,14 +253,14 @@ class Crawler:
         try:
             for vouch in hj.get("vouches", []):
                 vurl = fix_url(vouch["url"])
-                vsite = await self.sites.for_url(vurl)
+                vsite = await self.site_for_url(vurl)
                 vsite.vouchers.add(site.url)
         except Exception as e:
             error(f"reading human.json from {resp.url}: {e}")
 
     async def worker(self) -> None:
         while True:
-            site = await self.sites.queue.get()
+            site = await self.queue.get()
 
             try:
                 await self.get_site_data(site)
@@ -261,31 +270,31 @@ class Crawler:
                 #     import traceback
                 #     print(traceback.format_exc(), file=sys.stderr)
 
-            self.sites.queue.task_done()
+            self.queue.task_done()
 
     async def reporter(self) -> None:
         while True:
-            if self.sites.queue.qsize():
+            if self.queue.qsize():
                 print(
-                    f"### {self.sites.queue.qsize()} sites remaining, {len(self.sites)} total",
+                    f"### {self.queue.qsize()} sites remaining, {len(self.sites)} total",
                     file=sys.stderr,
                 )
             await asyncio.sleep(5)
 
     async def main(self, start_urls: Iterable[str], n_workers: int):
         for url in start_urls:
-            await self.sites.for_url(url)
+            await self.site_for_url(url)
 
         # req = Req("https://indieblog.page/export")
         # resp = await req.get()
         # if resp is not None:
         #     for feed in resp.json():
-        #         await self.sites.for_url(feed["homepage"])
+        #         await self.site_for_url(feed["homepage"])
 
         workers = []
         workers += [asyncio.create_task(self.reporter())]
         workers += [asyncio.create_task(self.worker()) for _ in range(n_workers)]
-        await self.sites.queue.join()
+        await self.queue.join()
         for w in workers:
             w.cancel()
 
