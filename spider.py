@@ -30,7 +30,6 @@ class Site:
         self.vouchers: set[str] = set()
         self.author = ""
         self.human_json: str | None = None
-        self.robots_txt: bool = False
         self.wander_js: bool = False
         self.fediverse_creator: str | None = None
         self.rss: set[str] = set()
@@ -55,8 +54,6 @@ class Site:
             print(f"    fediverse creator: {self.fediverse_creator}")
         if self.human_json:
             print(f"    human.json: {self.human_json}")
-        if self.robots_txt:
-            print("    has robots.txt")
         if self.wander_js:
             print("    has wander.js")
         for rss in self.rss:
@@ -136,18 +133,6 @@ class Crawler:
                     for subld in graph:
                         self.extract_facts_from_jsonld(site, subld)
 
-    async def read_robots_txt(self, site: Site) -> None:
-        req = Req(
-            "/robots.txt",
-            base=site.url,
-            fail_ok=True,
-            ok_content_types=["text/plain"],
-        )
-        resp = await req.get()
-        if resp is not None:
-            site.robots_txt = True
-            resp.save(dirname="data")
-
     def read_meta_tags(self, site: Site, resp: Resp) -> None:
         for item in resp.soup().find_all("meta", {"name": "author", "content": True}):
             if author := item["content"]:
@@ -223,8 +208,6 @@ class Crawler:
                 await self.site_for_url(root_for_url(page))
 
     async def get_site_data(self, site: Site) -> None:
-        await self.read_robots_txt(site)
-
         # fail_ok=True because bots might be forbidden
         page_resp = await Req(site.url, fail_ok=True).get()
         if page_resp is not None:
