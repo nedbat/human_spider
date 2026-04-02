@@ -12,7 +12,7 @@ TOKENS = r"""(?xm)
     """
 
 
-def parse_wander(text: str) -> dict:
+def parse_wander(text: str) -> dict[str, list[str]]:
     data: dict[str, list[str]] | None = None
     items = None
     name = None

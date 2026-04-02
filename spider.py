@@ -281,7 +281,7 @@ class Crawler:
                 )
             await asyncio.sleep(5)
 
-    async def main(self, start_urls: Iterable[str], n_workers: int):
+    async def main(self, start_urls: Iterable[str], n_workers: int) -> None:
         for url in start_urls:
             await self.site_for_url(url)
 
@@ -327,7 +327,7 @@ class Crawler:
         print(f"\nFound {rolls} blogrolls")
 
 
-def error(msg):
+def error(msg: str) -> None:
     print(f"** Error {msg}")
     print(f"** Error {msg}", file=sys.stderr)
 
