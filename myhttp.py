@@ -26,6 +26,11 @@ def root_for_url(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+class TryLater(Exception):
+    def __init__(self, delay: int) -> None:
+        self.delay = delay
+
+
 @dataclass
 class Resp:
     resp: aiohttp.ClientResponse
@@ -55,7 +60,7 @@ class Resp:
         filename = slug_for_url(self.url)
         ext = mimetypes.guess_extension(self.content_type())
         if ext is None:
-            if (m := re.search(r"\.\w+$", self.url)):
+            if m := re.search(r"\.\w+$", self.url):
                 ext = m.group(0)
         if ext is None:
             ext = ".dat"
@@ -82,11 +87,16 @@ class Req:
                 "User-Agent": "nedbat's human website crawler, https://nedbatchelder.com/blog/202603/humanjson",
             }
             async with session.get(url, timeout=10, headers=headers) as resp:
+                if resp.status == 429:
+                    raise TryLater(delay=3)
                 if resp.status != 200 and self.fail_ok:
                     return None
                 if resp.status in self.ok_errors:
                     return None
-                if self.ok_content_types and resp.content_type not in self.ok_content_types:
+                if (
+                    self.ok_content_types
+                    and resp.content_type not in self.ok_content_types
+                ):
                     return None
                 resp.raise_for_status()
                 return Resp(resp, await resp.content.read())

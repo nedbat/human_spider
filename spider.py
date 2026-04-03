@@ -10,6 +10,7 @@
 
 import asyncio
 import collections
+import random
 import sys
 import urllib.parse
 from collections.abc import Coroutine
@@ -19,7 +20,7 @@ from typing import Any, Callable, Iterable, Iterator
 import demjson3
 import listparser
 
-from myhttp import fix_url, root_for_url, slug_for_url, Req, Resp
+from myhttp import fix_url, root_for_url, slug_for_url, Req, Resp, TryLater
 from myjson import fix_json
 from parse_wander import parse_wander
 
@@ -90,6 +91,8 @@ class WorkItem:
     def __init__(self, fn: Callable[..., Coroutine[Any, Any, None]], **kwargs) -> None:
         self.fn = fn
         self.kwargs = kwargs
+        self.retries = 0
+        self.total_delay = 0.0
 
     def __str__(self) -> str:
         args = ", ".join(f"{k}={v!r}" for k, v in self.kwargs.items())
@@ -99,6 +102,8 @@ class WorkItem:
 class Crawler:
     def __init__(self) -> None:
         self.queue: asyncio.Queue[WorkItem] = asyncio.Queue()
+        self.waiting: set[asyncio.Task] = set()
+
         self.sites = Sites()
         self.people: dict[str, list[str]] = collections.defaultdict(list)
         self.human_jsons: dict[str, int] = {}
@@ -213,8 +218,8 @@ class Crawler:
         if page_resp is not None:
             self.read_meta_tags(site, page_resp)
             self.read_rss_links(site, page_resp)
-            await self.read_blogrolls(site, page_resp)
             self.read_jsonld(site, page_resp)
+            await self.read_blogrolls(site, page_resp)
             site.url = page_resp.url
             self.sites.by_url[site.url] = site
 
@@ -259,22 +264,45 @@ class Crawler:
     async def worker(self) -> None:
         while True:
             work = await self.queue.get()
-
+            retrying = False
             try:
                 await work.fn(**work.kwargs)
+                if work.retries > 0:
+                    print_both(f"** Success after {work.retries}, {work.total_delay:.1f}s: {work}")
+            except TryLater as tle:
+                if work.retries > 10:
+                    error(f"retrying {work} 10 times")
+                else:
+                    delay = tle.delay + 1.5**work.retries + 5 * random.random()
+                    work.retries += 1
+                    work.total_delay += delay
+                    print_both(f"** Retrying {work}: {work.retries}, {delay:.1f}s")
+                    task = asyncio.create_task(self.retry_later(work, delay))
+                    self.waiting.add(task)
+                    task.add_done_callback(self.waiting.discard)
+                    retrying = True
+                    continue
             except Exception as e:
                 error(f"in {work}", e)
                 # if 1:#"some erroring url" in url:
                 #     import traceback
                 #     print(traceback.format_exc(), file=sys.stderr)
+            finally:
+                if not retrying:
+                    self.queue.task_done()
 
-            self.queue.task_done()
+    async def retry_later(self, work: WorkItem, after: float) -> None:
+        await asyncio.sleep(after)
+        await self.queue.put(work)
+        self.queue.task_done()
 
     async def reporter(self) -> None:
         while True:
-            if self.queue.qsize():
+            if self.queue.qsize() or self.waiting:
                 print(
-                    f"### {self.queue.qsize()} sites remaining, {len(self.sites)} total",
+                    f"### {self.queue.qsize()} items to do, "
+                    + f"{len(self.waiting)} waiting, "
+                    + f"{len(self.sites)} sites",
                     file=sys.stderr,
                 )
             await asyncio.sleep(5)
@@ -283,11 +311,11 @@ class Crawler:
         for url in start_urls:
             await self.site_for_url(url)
 
-        # req = Req("https://indieblog.page/export")
-        # resp = await req.get()
-        # if resp is not None:
-        #     for feed in resp.json():
-        #         await self.site_for_url(feed["homepage"])
+        req = Req("https://indieblog.page/export")
+        resp = await req.get()
+        if resp is not None:
+            for feed in resp.json():
+                await self.site_for_url(feed["homepage"])
 
         workers = []
         workers += [asyncio.create_task(self.reporter())]
@@ -330,7 +358,10 @@ def error(msg: str, e: Exception | None = None) -> None:
         msg += f": {e.__class__.__name__}"
         if str(e):
             msg += f": {e}"
-    msg = f"** Error {msg}"
+    print_both(f"** Error {msg}")
+
+
+def print_both(msg: str) -> None:
     print(msg)
     print(msg, file=sys.stderr)
 
