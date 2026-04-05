@@ -50,6 +50,8 @@ class Site:
         print(self.url)
         if self.vouchers:
             print(f"    {len(self.vouchers)} human vouchers")
+            for v in self.vouchers:
+                print(f"        {v}")
         if self.author:
             print(f"    Author: {self.author}")
         if self.fediverse_creator:
@@ -288,6 +290,13 @@ class Crawler:
         except Exception as e:
             error(f"reading human.json from {resp.url}", e)
 
+    async def load_indieblog(self) -> None:
+        req = Req("https://indieblog.page/export")
+        resp = await req.get()
+        if resp is not None:
+            for feed in resp.json():
+                await self.site_for_url(feed["homepage"])
+
     async def worker(self) -> None:
         while True:
             work = await self.queue.get()
@@ -354,16 +363,7 @@ class Crawler:
                 )
             await asyncio.sleep(5)
 
-    async def main(self, start_urls: Iterable[str], n_workers: int) -> None:
-        for url in start_urls:
-            await self.site_for_url(url)
-
-        # req = Req("https://indieblog.page/export")
-        # resp = await req.get()
-        # if resp is not None:
-        #     for feed in resp.json():
-        #         await self.site_for_url(feed["homepage"])
-
+    async def run_workers(self, n_workers: int) -> None:
         workers = []
         workers += [asyncio.create_task(self.reporter())]
         workers += [asyncio.create_task(self.worker()) for _ in range(n_workers)]
@@ -375,6 +375,7 @@ class Crawler:
         for w in workers:
             w.cancel()
 
+    def print_results(self) -> None:
         print(f"\n\nFound {len(self.sites)} sites:")
         for site in sorted(self.sites):
             site.print()
@@ -403,10 +404,18 @@ class Crawler:
         rolls = sum(len(s.blogroll) for s in self.sites)
         print(f"\nFound {rolls} blogrolls")
 
+    async def main(self, start_urls: Iterable[str], n_workers: int) -> None:
+        for url in start_urls:
+            await self.site_for_url(url)
+        await self.queue_work(self.load_indieblog)
+
+        await self.run_workers(n_workers)
+        self.print_results()
+
 
 if __name__ == "__main__":
     urls = [
         "https://nedbatchelder.com",
         "https://susam.net",
     ]
-    asyncio.run(Crawler().main(urls, 20))
+    asyncio.run(Crawler().main(urls, 40))
