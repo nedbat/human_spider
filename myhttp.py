@@ -1,13 +1,20 @@
+"""HTTP helpers."""
+
 import json
 import mimetypes
+import random
 import re
+import socket
+import time
 import urllib.parse
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Collection
 
 import aiohttp
 from bs4 import BeautifulSoup
+
 
 
 def slug_for_url(url: str) -> str:
@@ -26,9 +33,51 @@ def root_for_url(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+# Don't request from the same IP more than once per this many seconds.
+ONE_PER = 0.25
+
+
 class TryLater(Exception):
-    def __init__(self, delay: int) -> None:
+    """Raise this to try a work item again later."""
+
+    def __init__(self, delay: float, reason: str) -> None:
         self.delay = delay
+        self.reason = reason
+
+
+@dataclass
+class AccessInfo:
+    """Information about when we can access a resource."""
+
+    # Don't access it until after this time.
+    after: float
+    # How many requesters have been told to wait.
+    waiters: int
+
+
+class RateLimiter:
+    """Track access to resources."""
+
+    def __init__(self, one_per: float) -> None:
+        self.one_per = one_per
+        self.resources: dict[str, AccessInfo] = {}
+
+    def should_wait(self, resource: str) -> float:
+        """How long should we wait to access this resource?"""
+        now = time.time()
+        info = self.resources.get(resource)
+        if info is None or now > info.after:
+            self.resources[resource] = AccessInfo(after=now + self.one_per, waiters=0)
+            return 0
+        else:
+            info.waiters += 1
+            # A random wait time, weighted toward the longer end.
+            return (info.after - now) + (
+                1 - random.random() ** 2
+            ) * self.one_per * info.waiters
+
+
+limiter = RateLimiter(one_per=ONE_PER)
 
 
 @dataclass
@@ -82,13 +131,22 @@ class Req:
         else:
             url = self.url
         url = fix_url(url)
+
+        netloc = urllib.parse.urlparse(url).netloc
+        ip = socket.gethostbyname(netloc)
+        delay = limiter.should_wait(ip)
+        if delay > 0:
+            raise TryLater(delay=delay, reason=f"limit for {netloc} ({ip})")
+
         async with aiohttp.ClientSession() as session:
             headers = {
                 "User-Agent": "nedbat's human website crawler, https://nedbatchelder.com/blog/202603/humanjson",
             }
             async with session.get(url, timeout=10, headers=headers) as resp:
+                #from report import print_both
+                #print_both(f"   Got {url} ({ip}): status={resp.status}")
                 if resp.status == 429:
-                    raise TryLater(delay=3)
+                    raise TryLater(delay=3, reason="status=429")
                 if resp.status != 200 and self.fail_ok:
                     return None
                 if resp.status in self.ok_errors:

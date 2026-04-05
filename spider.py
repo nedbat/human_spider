@@ -10,9 +10,9 @@
 
 import asyncio
 import collections
-import random
 import sys
 import urllib.parse
+
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
@@ -20,9 +20,10 @@ from typing import Any, Callable, Iterable, Iterator
 import demjson3
 import listparser
 
-from myhttp import fix_url, root_for_url, slug_for_url, Req, Resp, TryLater
+from myhttp import fix_url, root_for_url, slug_for_url, Req, Resp, ONE_PER, TryLater
 from myjson import fix_json
 from parse_wander import parse_wander
+from report import error, print_both
 
 
 class Site:
@@ -87,8 +88,11 @@ class Sites:
         return iter(self.all)
 
 
+type WorkFn = Callable[..., Coroutine[Any, Any, None]]
+
+
 class WorkItem:
-    def __init__(self, fn: Callable[..., Coroutine[Any, Any, None]], **kwargs) -> None:
+    def __init__(self, fn: WorkFn, **kwargs: Any) -> None:
         self.fn = fn
         self.kwargs = kwargs
         self.retries = 0
@@ -113,8 +117,7 @@ class Crawler:
     async def site_for_url(self, url: str) -> Site:
         site, is_new = self.sites.for_url(url)
         if is_new:
-            work = WorkItem(self.get_site_data, site=site)
-            await self.queue.put(work)
+            await self.queue_work(self.get_site_data, site=site)
         return site
 
     def extract_facts_from_jsonld(self, site: Site, jsonld: dict | list) -> None:
@@ -159,19 +162,26 @@ class Crawler:
                     site.rss.add(href)
 
     async def read_blogrolls(self, site: Site, resp: Resp) -> None:
+        """Read the blogrolls from a site."""
         for item in resp.soup().find_all(
             "link", {"rel": "blogroll", "type": "text/xml", "href": True}
         ):
             if href := item["href"]:
-                req = Req(href, base=site.url, fail_ok=True)
-                site.blogroll.add(req.url)
-                roll_resp = await req.get()
-                if roll_resp:
-                    opml = listparser.parse(roll_resp.text())
-                    for feed in opml.get("feeds", ()):
-                        url = feed.get("url")
-                        if url is not None:
-                            await self.site_for_url(root_for_url(url))
+                # These are most likely same-site URLs, so wait a bit.
+                await self.queue_work(
+                    self.read_one_blogroll, delay=1.1 * ONE_PER, site=site, href=href
+                )
+
+    async def read_one_blogroll(self, site: Site, href: str) -> None:
+        req = Req(href, base=site.url, fail_ok=True)
+        site.blogroll.add(req.url)
+        roll_resp = await req.get()
+        if roll_resp:
+            opml = listparser.parse(roll_resp.text())
+            for feed in opml.get("feeds", ()):
+                url = feed.get("url")
+                if url is not None:
+                    await self.site_for_url(root_for_url(url))
 
     def read_jsonld(self, site: Site, resp: Resp) -> None:
         for i, item in enumerate(
@@ -188,17 +198,14 @@ class Crawler:
             else:
                 self.extract_facts_from_jsonld(site, jsonld)
 
-    async def read_wanderjs(self, site: Site) -> None:
-        for relative in ["/wander/wander.js", "/wander.js"]:
-            req = Req(
-                relative,
-                base=site.url,
-                fail_ok=True,
-                ok_content_types=["text/javascript", "application/javascript"],
-            )
-            resp = await req.get()
-            if resp is not None:
-                break
+    async def read_wanderjs(self, site: Site, relative_url: str) -> None:
+        req = Req(
+            relative_url,
+            base=site.url,
+            fail_ok=True,
+            ok_content_types=["text/javascript", "application/javascript"],
+        )
+        resp = await req.get()
         if resp is not None:
             site.wander_js = True
             resp.save(dirname="data")
@@ -223,7 +230,18 @@ class Crawler:
             site.url = page_resp.url
             self.sites.by_url[site.url] = site
 
-        await self.read_wanderjs(site)
+        await self.queue_work(
+            self.read_wanderjs,
+            delay=3.25 * ONE_PER,
+            site=site,
+            relative_url="/wander/wander.js",
+        )
+        await self.queue_work(
+            self.read_wanderjs,
+            delay=4.35 * ONE_PER,
+            site=site,
+            relative_url="/wander.js",
+        )
 
         guessed = False
         hjurl = ""
@@ -237,6 +255,15 @@ class Crawler:
             hjurl = "/human.json"
             guessed = True
 
+        await self.queue_work(
+            self.read_human_json,
+            delay=2.25 * ONE_PER,
+            site=site,
+            hjurl=hjurl,
+            guessed=guessed,
+        )
+
+    async def read_human_json(self, site: Site, hjurl: str, guessed: bool) -> None:
         req = Req(hjurl, base=site.url)
         if guessed:
             req.ok_errors = {403, 404, 406, 410}
@@ -267,19 +294,22 @@ class Crawler:
             retrying = False
             try:
                 await work.fn(**work.kwargs)
-                if work.retries > 0:
-                    print_both(f"** Success after {work.retries}, {work.total_delay:.1f}s: {work}")
+                if work.retries > 3:
+                    print_both(
+                        f"** Success after {work.retries}, {work.total_delay:.1f}s: {work}"
+                    )
             except TryLater as tle:
-                if work.retries > 10:
-                    error(f"retrying {work} 10 times")
+                if work.retries > 10 or tle.delay > 20:
+                    error(f"retried {work} {work.retries} times, last {tle.delay:.1f}s")
                 else:
-                    delay = tle.delay + 1.5**work.retries + 5 * random.random()
+                    delay = tle.delay + 1.25**work.retries
                     work.retries += 1
                     work.total_delay += delay
-                    print_both(f"** Retrying {work}: {work.retries}, {delay:.1f}s")
-                    task = asyncio.create_task(self.retry_later(work, delay))
-                    self.waiting.add(task)
-                    task.add_done_callback(self.waiting.discard)
+                    if work.retries > 3:
+                        print_both(
+                            f"** Retrying {work}: {work.retries}, {delay:.1f}s: {tle.reason}"
+                        )
+                    self.do_later(work, delay, mark_done=True)
                     retrying = True
                     continue
             except Exception as e:
@@ -291,10 +321,27 @@ class Crawler:
                 if not retrying:
                     self.queue.task_done()
 
-    async def retry_later(self, work: WorkItem, after: float) -> None:
+    async def queue_work(self, fn: WorkFn, *, delay: float = 0, **kwargs: Any) -> None:
+        work = WorkItem(fn, **kwargs)
+        if delay:
+            self.do_later(work, delay)
+        else:
+            await self.queue.put(work)
+
+    def do_later(self, work: WorkItem, delay: float, mark_done: bool = False) -> None:
+        task = asyncio.create_task(self.wait_then_queue(work, delay))
+        self.waiting.add(task)
+
+        def done_callback(task):
+            self.waiting.discard(task)
+            if mark_done:
+                self.queue.task_done()
+
+        task.add_done_callback(done_callback)
+
+    async def wait_then_queue(self, work: WorkItem, after: float) -> None:
         await asyncio.sleep(after)
         await self.queue.put(work)
-        self.queue.task_done()
 
     async def reporter(self) -> None:
         while True:
@@ -311,16 +358,20 @@ class Crawler:
         for url in start_urls:
             await self.site_for_url(url)
 
-        req = Req("https://indieblog.page/export")
-        resp = await req.get()
-        if resp is not None:
-            for feed in resp.json():
-                await self.site_for_url(feed["homepage"])
+        # req = Req("https://indieblog.page/export")
+        # resp = await req.get()
+        # if resp is not None:
+        #     for feed in resp.json():
+        #         await self.site_for_url(feed["homepage"])
 
         workers = []
         workers += [asyncio.create_task(self.reporter())]
         workers += [asyncio.create_task(self.worker()) for _ in range(n_workers)]
-        await self.queue.join()
+        while True:
+            await self.queue.join()
+            if not self.waiting:
+                break
+            await asyncio.wait(self.waiting)
         for w in workers:
             w.cancel()
 
@@ -351,19 +402,6 @@ class Crawler:
 
         rolls = sum(len(s.blogroll) for s in self.sites)
         print(f"\nFound {rolls} blogrolls")
-
-
-def error(msg: str, e: Exception | None = None) -> None:
-    if e is not None:
-        msg += f": {e.__class__.__name__}"
-        if str(e):
-            msg += f": {e}"
-    print_both(f"** Error {msg}")
-
-
-def print_both(msg: str) -> None:
-    print(msg)
-    print(msg, file=sys.stderr)
 
 
 if __name__ == "__main__":
