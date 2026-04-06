@@ -10,6 +10,7 @@
 
 import asyncio
 import collections
+import json
 import sys
 import urllib.parse
 
@@ -382,11 +383,23 @@ class Crawler:
     # One-off blog sources.
 
     async def load_indieblog(self) -> None:
-        req = Req("https://indieblog.page/export")
-        resp = await req.get()
+        resp = await Req("https://indieblog.page/export").get()
         if resp is not None:
             for feed in resp.json():
                 await self.site_for_url(feed["homepage"])
+
+    async def load_blogroll_org(self) -> None:
+        resp = await Req("https://blogroll.org/").get()
+        for entry in resp.soup().find_all("a", {"class": "entry-main", "href": True}):
+            await self.site_for_url(entry["href"])
+
+    async def load_a_website_is_a_room(self) -> None:
+        url = "https://docs.google.com/spreadsheets/d/1KjiqdG8EmGd8oPVSNwRcFedNQPG1A45ycoRpYvGzKIg/gviz/tq?gid=0&tq=select%20B%20order%20by%20D%20desc&tqx=responseHandler:gimmedata"
+        resp = await Req(url).get()
+        text = resp.text()
+        json_text = text[text.find("{") : text.rfind("}") + 1]
+        for row in json.loads(json_text)["table"]["rows"]:
+            await self.site_for_url(row["c"][0]["v"])
 
     # Main code
 
@@ -428,6 +441,8 @@ class Crawler:
         for url in start_urls:
             await self.site_for_url(url)
         await self.queue_work(self.load_indieblog)
+        await self.queue_work(self.load_blogroll_org)
+        await self.queue_work(self.load_a_website_is_a_room)
 
         await self.run_workers(n_workers)
         self.print_results()
