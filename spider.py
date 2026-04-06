@@ -34,7 +34,7 @@ class Site:
         self.human_json: str | None = None
         self.wander_js: bool = False
         self.fediverse_creator: str | None = None
-        self.rss: set[str] = set()
+        self.feeds: set[str] = set()
         self.blogroll: set[str] = set()
 
     def __str__(self) -> str:
@@ -60,8 +60,8 @@ class Site:
             print(f"    human.json: {self.human_json}")
         if self.wander_js:
             print("    has wander.js")
-        for rss in self.rss:
-            print(f"    rss: {rss}")
+        for feed in self.feeds:
+            print(f"    feed: {feed}")
         for roll in self.blogroll:
             print(f"    blogroll: {roll}")
 
@@ -117,7 +117,7 @@ class Crawler:
         self.wander_pages: set[str] = set()
 
     async def site_for_url(self, url: str) -> Site:
-        site, is_new = self.sites.for_url(url)
+        site, is_new = self.sites.for_url(root_for_url(url))
         if is_new:
             await self.queue_work(self.get_site_data, site=site)
         return site
@@ -145,30 +145,35 @@ class Crawler:
 
     def read_meta_tags(self, site: Site, resp: Resp) -> None:
         for item in resp.soup().find_all("meta", {"name": "author", "content": True}):
-            if author := item["content"]:
+            if author := item["content"].strip():
                 site.author = author
                 self.people[author].append(f"Author of {site}")
         for item in resp.soup().find_all(
             "meta", {"name": "fediverse:creator", "content": True}
         ):
-            if creator := item["content"]:
+            if creator := item["content"].strip():
                 site.fediverse_creator = creator
 
-    def read_rss_links(self, site: Site, resp: Resp) -> None:
-        for item in resp.soup().find_all(
-            "link", {"rel": "alternate", "type": "application/rss+xml", "href": True}
-        ):
-            if href := item["href"]:
-                if "/comments/" not in href:
-                    href = urllib.parse.urljoin(site.url, href)
-                    site.rss.add(href)
+    def read_feed_links(self, site: Site, resp: Resp) -> None:
+        mimetypes = [
+            "application/atom+xml",
+            "application/rss+xml",
+        ]
+        for mimetype in mimetypes:
+            for item in resp.soup().find_all(
+                "link", {"rel": "alternate", "type": mimetype, "href": True}
+            ):
+                if href := item["href"].strip():
+                    if "/comments/" not in href:
+                        href = urllib.parse.urljoin(site.url, href)
+                        site.feeds.add(href)
 
     async def read_blogrolls(self, site: Site, resp: Resp) -> None:
         """Read the blogrolls from a site."""
         for item in resp.soup().find_all(
             "link", {"rel": "blogroll", "type": "text/xml", "href": True}
         ):
-            if href := item["href"]:
+            if href := item["href"].strip():
                 # These are most likely same-site URLs, so wait a bit.
                 await self.queue_work(
                     self.read_one_blogroll, delay=1.1 * ONE_PER, site=site, href=href
@@ -183,7 +188,7 @@ class Crawler:
             for feed in opml.get("feeds", ()):
                 url = feed.get("url")
                 if url is not None:
-                    await self.site_for_url(root_for_url(url))
+                    await self.site_for_url(url)
 
     def read_jsonld(self, site: Site, resp: Resp) -> None:
         for i, item in enumerate(
@@ -215,22 +220,24 @@ class Crawler:
             for console in wander_data["consoles"]:
                 console = fix_url(console)
                 self.wander_consoles.add(console)
-                await self.site_for_url(root_for_url(console))
+                await self.site_for_url(console)
             for page in wander_data["pages"]:
                 page = fix_url(page)
                 self.wander_pages.add(page)
-                await self.site_for_url(root_for_url(page))
+                await self.site_for_url(page)
 
     async def get_site_data(self, site: Site) -> None:
         # fail_ok=True because bots might be forbidden
         page_resp = await Req(site.url, fail_ok=True).get()
-        if page_resp is not None:
-            self.read_meta_tags(site, page_resp)
-            self.read_rss_links(site, page_resp)
-            self.read_jsonld(site, page_resp)
-            await self.read_blogrolls(site, page_resp)
-            site.url = page_resp.url
-            self.sites.by_url[site.url] = site
+        if page_resp is None:
+            return
+
+        self.read_meta_tags(site, page_resp)
+        self.read_feed_links(site, page_resp)
+        self.read_jsonld(site, page_resp)
+        await self.read_blogrolls(site, page_resp)
+        site.url = page_resp.url
+        self.sites.by_url[site.url] = site
 
         await self.queue_work(
             self.read_wanderjs,
@@ -380,6 +387,11 @@ class Crawler:
         for site in sorted(self.sites):
             site.print()
 
+        print(f"\n\nHuman sites with feeds:")
+        for site in sorted(self.sites):
+            if site.vouchers and site.feeds:
+                site.print()
+
         print(f"\nFound {len(self.people)} people:")
         for name, person in sorted(self.people.items()):
             print(name)
@@ -398,8 +410,8 @@ class Crawler:
         creators = {s.fediverse_creator for s in self.sites}
         print(f"\nFound {len(creators)} fediverse creators")
 
-        rsses = sum(len(s.rss) for s in self.sites)
-        print(f"\nFound {rsses} rss feeds")
+        feeds = sum(len(s.feeds) for s in self.sites)
+        print(f"\nFound {feeds} feeds")
 
         rolls = sum(len(s.blogroll) for s in self.sites)
         print(f"\nFound {rolls} blogrolls")
