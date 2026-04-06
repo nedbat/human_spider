@@ -116,6 +116,88 @@ class Crawler:
         self.wander_consoles: set[str] = set()
         self.wander_pages: set[str] = set()
 
+    # Generic async working
+
+    async def worker(self) -> None:
+        while True:
+            work = await self.queue.get()
+            retrying = False
+            try:
+                await work.fn(**work.kwargs)
+                if work.retries > 3:
+                    print_both(
+                        f"** Success after {work.retries}, {work.total_delay:.1f}s: {work}"
+                    )
+            except TryLater as tle:
+                if work.retries > 10 or tle.delay > 20:
+                    error(f"retried {work} {work.retries} times, last {tle.delay:.1f}s")
+                else:
+                    delay = tle.delay + 1.25**work.retries
+                    work.retries += 1
+                    work.total_delay += delay
+                    if work.retries > 3:
+                        print_both(
+                            f"** Retrying {work}: {work.retries}, {delay:.1f}s: {tle.reason}"
+                        )
+                    self.do_later(work, delay, mark_done=True)
+                    retrying = True
+                    continue
+            except Exception as e:
+                error(f"in {work}", e)
+                # if 1:#"some erroring url" in url:
+                #     import traceback
+                #     print(traceback.format_exc(), file=sys.stderr)
+            finally:
+                if not retrying:
+                    self.queue.task_done()
+
+    async def queue_work(self, fn: WorkFn, *, delay: float = 0, **kwargs: Any) -> None:
+        work = WorkItem(fn, **kwargs)
+        if delay:
+            self.do_later(work, delay)
+        else:
+            await self.queue.put(work)
+
+    def do_later(self, work: WorkItem, delay: float, mark_done: bool = False) -> None:
+        task = asyncio.create_task(self.wait_then_queue(work, delay))
+        self.waiting.add(task)
+
+        def done_callback(task):
+            self.waiting.discard(task)
+            if mark_done:
+                self.queue.task_done()
+
+        task.add_done_callback(done_callback)
+
+    async def wait_then_queue(self, work: WorkItem, after: float) -> None:
+        await asyncio.sleep(after)
+        await self.queue.put(work)
+
+    async def reporter(self) -> None:
+        while True:
+            if self.queue.qsize() or self.waiting:
+                print(
+                    f"### {self.queue.qsize()} items to do, "
+                    + f"{len(self.waiting)} waiting, "
+                    + f"{len(self.sites)} sites",
+                    file=sys.stderr,
+                )
+            await asyncio.sleep(5)
+
+    async def run_workers(self, n_workers: int) -> None:
+        workers = []
+        workers += [asyncio.create_task(self.reporter())]
+        workers += [asyncio.create_task(self.worker()) for _ in range(n_workers)]
+        while True:
+            await self.queue.join()
+            if not self.waiting:
+                break
+            await asyncio.wait(self.waiting)
+        for w in workers:
+            w.cancel()
+
+    # Specifics of blog scraping.
+
     async def site_for_url(self, url: str) -> Site:
         site, is_new = self.sites.for_url(root_for_url(url))
         if is_new:
@@ -297,6 +379,8 @@ class Crawler:
         except Exception as e:
             error(f"reading human.json from {resp.url}", e)
 
+    # One-off blog sources.
+
     async def load_indieblog(self) -> None:
         req = Req("https://indieblog.page/export")
         resp = await req.get()
@@ -304,83 +388,7 @@ class Crawler:
             for feed in resp.json():
                 await self.site_for_url(feed["homepage"])
 
-    async def worker(self) -> None:
-        while True:
-            work = await self.queue.get()
-            retrying = False
-            try:
-                await work.fn(**work.kwargs)
-                if work.retries > 3:
-                    print_both(
-                        f"** Success after {work.retries}, {work.total_delay:.1f}s: {work}"
-                    )
-            except TryLater as tle:
-                if work.retries > 10 or tle.delay > 20:
-                    error(f"retried {work} {work.retries} times, last {tle.delay:.1f}s")
-                else:
-                    delay = tle.delay + 1.25**work.retries
-                    work.retries += 1
-                    work.total_delay += delay
-                    if work.retries > 3:
-                        print_both(
-                            f"** Retrying {work}: {work.retries}, {delay:.1f}s: {tle.reason}"
-                        )
-                    self.do_later(work, delay, mark_done=True)
-                    retrying = True
-                    continue
-            except Exception as e:
-                error(f"in {work}", e)
-                # if 1:#"some erroring url" in url:
-                #     import traceback
-                #     print(traceback.format_exc(), file=sys.stderr)
-            finally:
-                if not retrying:
-                    self.queue.task_done()
-
-    async def queue_work(self, fn: WorkFn, *, delay: float = 0, **kwargs: Any) -> None:
-        work = WorkItem(fn, **kwargs)
-        if delay:
-            self.do_later(work, delay)
-        else:
-            await self.queue.put(work)
-
-    def do_later(self, work: WorkItem, delay: float, mark_done: bool = False) -> None:
-        task = asyncio.create_task(self.wait_then_queue(work, delay))
-        self.waiting.add(task)
-
-        def done_callback(task):
-            self.waiting.discard(task)
-            if mark_done:
-                self.queue.task_done()
-
-        task.add_done_callback(done_callback)
-
-    async def wait_then_queue(self, work: WorkItem, after: float) -> None:
-        await asyncio.sleep(after)
-        await self.queue.put(work)
-
-    async def reporter(self) -> None:
-        while True:
-            if self.queue.qsize() or self.waiting:
-                print(
-                    f"### {self.queue.qsize()} items to do, "
-                    + f"{len(self.waiting)} waiting, "
-                    + f"{len(self.sites)} sites",
-                    file=sys.stderr,
-                )
-            await asyncio.sleep(5)
-
-    async def run_workers(self, n_workers: int) -> None:
-        workers = []
-        workers += [asyncio.create_task(self.reporter())]
-        workers += [asyncio.create_task(self.worker()) for _ in range(n_workers)]
-        while True:
-            await self.queue.join()
-            if not self.waiting:
-                break
-            await asyncio.wait(self.waiting)
-        for w in workers:
-            w.cancel()
+    # Main code
 
     def print_results(self) -> None:
         print(f"\n\nFound {len(self.sites)} sites:")
