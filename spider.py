@@ -420,10 +420,10 @@ class Crawler:
         for site in sorted(self.sites):
             site.print()
 
-        print(f"\n\nHuman sites with feeds:")
-        for site in sorted(self.sites):
-            if site.vouchers and site.feeds:
-                site.print()
+        human_feeds = [s for s in self.sites if s.vouchers and s.feeds]
+        print(f"\n\nFound {len(human_feeds)} human sites with feeds:")
+        for site in sorted(human_feeds):
+            site.print()
 
         print(f"\nFound {len(self.people)} people:")
         for name, person in sorted(self.people.items()):
