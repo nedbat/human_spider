@@ -11,6 +11,7 @@
 import asyncio
 import collections
 import json
+import random
 import sys
 import time
 import urllib.parse
@@ -139,10 +140,12 @@ class Crawler:
                         f"** Success after {work.retries}, {work.total_delay:.1f}s: {work}"
                     )
             except TryLater as tle:
-                if work.retries > 10 or tle.delay > 20:
+                if work.retries >= 20:
                     error(f"retried {work} {work.retries} times, last {tle.delay:.1f}s")
                 else:
-                    delay = tle.delay + 1.25**work.retries
+                    # pick a max delay, but a bit random
+                    max_delay = 20 + random.random() * 10
+                    delay = min(tle.delay, max_delay)
                     work.retries += 1
                     work.total_delay += delay
                     if work.retries > 3:
@@ -188,8 +191,8 @@ class Crawler:
             if self.queue.qsize() or self.waiting:
                 print(
                     "### "
-                    + f"{nice_seconds(int(time.time() - self.start))} "
-                    + f"{self.queue.qsize()} items to do, "
+                    + f"{nice_seconds(int(time.time() - self.start))}: "
+                    + f"{self.queue.qsize()} to do, "
                     + f"{len(self.waiting)} waiting, "
                     + f"{len(self.sites)} sites",
                     file=sys.stderr,
@@ -370,7 +373,7 @@ class Crawler:
     async def read_human_json(self, site: Site, hjurl: str, guessed: bool) -> None:
         req = Req(hjurl, base=site.url)
         if guessed:
-            req.ok_errors = {403, 404, 406, 410}
+            req.ok_errors = {400, 403, 404, 406, 410}
         if (resp := await req.get()) is None:
             return None
 
@@ -402,16 +405,22 @@ class Crawler:
 
     async def load_blogroll_org(self) -> None:
         resp = await Req("https://blogroll.org/").get()
-        for entry in resp.soup().find_all("a", {"class": "entry-main", "href": True}):
-            await self.site_for_url(entry["href"])
+        if resp is not None:
+            for entry in resp.soup().find_all("a", {"class": "entry-main", "href": True}):
+                await self.site_for_url(entry["href"])
 
     async def load_a_website_is_a_room(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/1KjiqdG8EmGd8oPVSNwRcFedNQPG1A45ycoRpYvGzKIg/gviz/tq?gid=0&tq=select%20B%20order%20by%20D%20desc&tqx=responseHandler:gimmedata"
         resp = await Req(url).get()
-        text = resp.text()
-        json_text = text[text.find("{") : text.rfind("}") + 1]
-        for row in json.loads(json_text)["table"]["rows"]:
-            await self.site_for_url(row["c"][0]["v"])
+        if resp is not None:
+            text = resp.text()
+            json_text = text[text.find("{") : text.rfind("}") + 1]
+            for row in json.loads(json_text)["table"]["rows"]:
+                await self.site_for_url(row["c"][0]["v"])
+
+    async def load_ooh_directory(self) -> None:
+        for line in Path("ooh_directory.txt").open():
+            await self.site_for_url(line.strip())
 
     # Main code
 
@@ -455,6 +464,7 @@ class Crawler:
         await self.queue_work(self.load_indieblog)
         await self.queue_work(self.load_blogroll_org)
         await self.queue_work(self.load_a_website_is_a_room)
+        await self.queue_work(self.load_ooh_directory)
 
         await self.run_workers(n_workers)
         self.print_results()

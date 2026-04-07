@@ -1,6 +1,7 @@
 """HTTP helpers."""
 
 import json
+import logging
 import mimetypes
 import random
 import re
@@ -14,7 +15,6 @@ from typing import Any, Collection
 
 import aiohttp
 from bs4 import BeautifulSoup
-
 
 
 def slug_for_url(url: str) -> str:
@@ -62,19 +62,22 @@ class RateLimiter:
         self.one_per = one_per
         self.resources: dict[str, AccessInfo] = {}
 
-    def should_wait(self, resource: str) -> float:
+    def should_wait(self, resource: str) -> tuple[float, int]:
         """How long should we wait to access this resource?"""
         now = time.time()
         info = self.resources.get(resource)
-        if info is None or now > info.after:
+        if info is None:
             self.resources[resource] = AccessInfo(after=now + self.one_per, waiters=0)
-            return 0
+            return 0, 0
+        elif now > info.after:
+            info.after = now + self.one_per
+            info.waiters = max(0, info.waiters - 1)
+            return 0, info.waiters - 1
         else:
             info.waiters += 1
-            # A random wait time, weighted toward the longer end.
-            return (info.after - now) + (
-                1 - random.random() ** 2
-            ) * self.one_per * info.waiters
+            # A random wait time, skewed toward sooner
+            delay = (info.after - now + self.one_per / 10) + (random.random() ** 2) * self.one_per * info.waiters
+            return delay, info.waiters
 
 
 limiter = RateLimiter(one_per=ONE_PER)
@@ -117,6 +120,15 @@ class Resp:
             f.write(self.content)
 
 
+fetch_log = logging.getLogger("fetch")
+fetch_log.setLevel(logging.DEBUG)
+fetch_handler = logging.FileHandler("fetch.log", mode="w")
+fetch_handler.setFormatter(
+    logging.Formatter("%(asctime)s.%(msecs)03d %(message)s", datefmt="%H:%M:%S")
+)
+fetch_log.addHandler(fetch_handler)
+
+
 @dataclass
 class Req:
     url: str
@@ -134,27 +146,34 @@ class Req:
 
         netloc = urllib.parse.urlparse(url).netloc
         ip = socket.gethostbyname(netloc)
-        delay = limiter.should_wait(ip)
+        show_url = f"{url} ({ip})"
+        delay, waiters = limiter.should_wait(ip)
         if delay > 0:
+            fetch_log.info("Delay %s for %.1f, %d waiters", show_url, delay, waiters)
             raise TryLater(delay=delay, reason=f"limit for {netloc} ({ip})")
 
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                "User-Agent": "nedbat's human website crawler, https://nedbatchelder.com/blog/202603/humanjson",
-            }
-            async with session.get(url, timeout=10, headers=headers) as resp:
-                #from report import print_both
-                #print_both(f"   Got {url} ({ip}): status={resp.status}")
-                if resp.status == 429:
-                    raise TryLater(delay=3, reason="status=429")
-                if resp.status != 200 and self.fail_ok:
-                    return None
-                if resp.status in self.ok_errors:
-                    return None
-                if (
-                    self.ok_content_types
-                    and resp.content_type not in self.ok_content_types
-                ):
-                    return None
-                resp.raise_for_status()
-                return Resp(resp, await resp.content.read())
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "User-Agent": "nedbat's human website crawler, https://nedbatchelder.com/blog/202603/humanjson",
+                }
+                async with session.get(url, timeout=10, headers=headers) as resp:
+                    # from report import print_both
+                    # print_both(f"   Got {url} ({ip}): status={resp.status}")
+                    fetch_log.info("Fetch %s, status=%s", show_url, resp.status)
+                    if resp.status == 429:
+                        raise TryLater(delay=3, reason="status=429")
+                    if resp.status != 200 and self.fail_ok:
+                        return None
+                    if resp.status in self.ok_errors:
+                        return None
+                    if (
+                        self.ok_content_types
+                        and resp.content_type not in self.ok_content_types
+                    ):
+                        return None
+                    resp.raise_for_status()
+                    return Resp(resp, await resp.content.read())
+        except Exception as e:
+            fetch_log.info("Fetch %s ** %s: %s", show_url, e.__class__.__name__, e)
+            raise
