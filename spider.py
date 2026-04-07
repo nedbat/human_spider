@@ -331,7 +331,7 @@ class Crawler:
         self.read_feed_links(site, page_resp)
         self.read_jsonld(site, page_resp)
         await self.read_blogrolls(site, page_resp)
-        site.url = page_resp.url
+        site.url = root_for_url(page_resp.url)
         self.sites.by_url[site.url] = site
 
         await self.queue_work(
