@@ -12,6 +12,7 @@ import asyncio
 import collections
 import json
 import sys
+import time
 import urllib.parse
 
 from collections.abc import Coroutine
@@ -106,10 +107,18 @@ class WorkItem:
         return f"{self.fn.__name__}({args})"
 
 
+def nice_seconds(s: int) -> str:
+    m, s = divmod(s, 60)
+    h, m = divmod(m, 60)
+    parts = zip([h, m, s], "hms")
+    return "".join(f"{n}{u}" for n, u in parts if n) or "0s"
+
+
 class Crawler:
     def __init__(self) -> None:
         self.queue: asyncio.Queue[WorkItem] = asyncio.Queue()
         self.waiting: set[asyncio.Task] = set()
+        self.start = 0.0
 
         self.sites = Sites()
         self.people: dict[str, list[str]] = collections.defaultdict(list)
@@ -178,7 +187,9 @@ class Crawler:
         while True:
             if self.queue.qsize() or self.waiting:
                 print(
-                    f"### {self.queue.qsize()} items to do, "
+                    "### "
+                    + f"{nice_seconds(int(time.time() - self.start))} "
+                    + f"{self.queue.qsize()} items to do, "
                     + f"{len(self.waiting)} waiting, "
                     + f"{len(self.sites)} sites",
                     file=sys.stderr,
@@ -186,6 +197,7 @@ class Crawler:
             await asyncio.sleep(5)
 
     async def run_workers(self, n_workers: int) -> None:
+        self.start = time.time()
         workers = []
         workers += [asyncio.create_task(self.reporter())]
         workers += [asyncio.create_task(self.worker()) for _ in range(n_workers)]
