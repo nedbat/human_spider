@@ -51,8 +51,6 @@ class AccessInfo:
 
     # Don't access it until after this time.
     after: float
-    # How many requesters have been told to wait.
-    waiters: int
 
 
 class RateLimiter:
@@ -62,22 +60,20 @@ class RateLimiter:
         self.one_per = one_per
         self.resources: dict[str, AccessInfo] = {}
 
-    def should_wait(self, resource: str) -> tuple[float, int]:
+    def should_wait(self, resource: str) -> float:
         """How long should we wait to access this resource?"""
         now = time.time()
         info = self.resources.get(resource)
         if info is None:
-            self.resources[resource] = AccessInfo(after=now + self.one_per, waiters=0)
-            return 0, 0
+            self.resources[resource] = AccessInfo(after=now + self.one_per)
+            return 0
         elif now > info.after:
             info.after = now + self.one_per
-            info.waiters = max(0, info.waiters - 1)
-            return 0, info.waiters - 1
+            return 0
         else:
-            info.waiters += 1
-            # A random wait time, skewed toward sooner
-            delay = (info.after - now + self.one_per / 10) + (random.random() ** 2) * self.one_per * info.waiters
-            return delay, info.waiters
+            # A random wait time
+            delay = (info.after - now + self.one_per / 10) + random.random() * self.one_per * 10
+            return delay
 
 
 limiter = RateLimiter(one_per=ONE_PER)
@@ -147,9 +143,9 @@ class Req:
         netloc = urllib.parse.urlparse(url).netloc
         ip = socket.gethostbyname(netloc)
         show_url = f"{url} ({ip})"
-        delay, waiters = limiter.should_wait(ip)
+        delay = limiter.should_wait(ip)
         if delay > 0:
-            fetch_log.info("Delay %s for %.1f, %d waiters", show_url, delay, waiters)
+            fetch_log.info("Delay %s for %.1f", show_url, delay)
             raise TryLater(delay=delay, reason=f"limit for {netloc} ({ip})")
 
         try:
