@@ -3,7 +3,6 @@
 import json
 import logging
 import mimetypes
-import random
 import re
 import socket
 import time
@@ -50,7 +49,9 @@ class AccessInfo:
     """Information about when we can access a resource."""
 
     # Don't access it until after this time.
-    after: float
+    next_ok: float
+    # The farthest out time we told someone to wait.
+    last_waiter: float
 
 
 class RateLimiter:
@@ -63,17 +64,18 @@ class RateLimiter:
     def should_wait(self, resource: str) -> float:
         """How long should we wait to access this resource?"""
         now = time.time()
+        now_next = now + self.one_per
         info = self.resources.get(resource)
         if info is None:
-            self.resources[resource] = AccessInfo(after=now + self.one_per)
+            self.resources[resource] = AccessInfo(next_ok=now_next, last_waiter=now_next)
             return 0
-        elif now > info.after:
-            info.after = now + self.one_per
+        elif now > info.next_ok:
+            info.next_ok = info.last_waiter = now_next
             return 0
         else:
-            # A random wait time
-            delay = (info.after - now + self.one_per / 10) + random.random() * self.one_per * 10
-            return delay
+            my_time = info.last_waiter + self.one_per * 1.05
+            info.last_waiter = my_time
+            return my_time - now
 
 
 limiter = RateLimiter(one_per=ONE_PER)

@@ -137,11 +137,11 @@ class Crawler:
                 await work.fn(**work.kwargs)
                 if work.retries > 3:
                     print_both(
-                        f"** Success after {work.retries}, {work.total_delay:.1f}s: {work}"
+                        f"** Success after {work.retries}, {work.total_delay:.3f}s: {work}"
                     )
             except TryLater as tle:
                 if work.retries >= 20:
-                    error(f"retried {work} {work.retries} times, last {tle.delay:.1f}s")
+                    error(f"retried {work} {work.retries} times, last {tle.delay:.3f}s")
                 else:
                     # pick a max delay, but a bit random
                     max_delay = 20 + random.random() * 10
@@ -150,7 +150,7 @@ class Crawler:
                     work.total_delay += delay
                     if work.retries > 3:
                         print_both(
-                            f"** Retrying {work}: {work.retries}, {delay:.1f}s: {tle.reason}"
+                            f"** Retrying {work}: {work.retries}, {delay:.3f}s: {tle.reason}"
                         )
                     self.do_later(work, delay, mark_done=True)
                     retrying = True
