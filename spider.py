@@ -426,7 +426,9 @@ class Crawler:
     async def load_blogroll_org(self) -> None:
         resp = await Req("https://blogroll.org/").get()
         if resp is not None:
-            for entry in resp.soup().find_all("a", {"class": "entry-main", "href": True}):
+            for entry in resp.soup().find_all(
+                "a", {"class": "entry-main", "href": True}
+            ):
                 await self.site_for_url(entry["href"])
 
     async def load_a_website_is_a_room(self) -> None:
