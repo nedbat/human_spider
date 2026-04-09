@@ -40,6 +40,7 @@ class Site:
         self.feeds: set[str] = set()
         self.blogroll: set[str] = set()
         self.relme: set[str] = set()
+        self.webmention: set[str] = set()
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
@@ -70,6 +71,8 @@ class Site:
             print(f"    blogroll: {roll}")
         for me in self.relme:
             print(f"    rel=me: {me}")
+        for w in self.webmention:
+            print(f"    webmention: {w}")
 
 
 class Sites:
@@ -312,6 +315,12 @@ class Crawler:
             if href := tag["href"].strip():
                 site.relme.add(href)
 
+    def read_webmention(self, site: Site, resp: Resp) -> None:
+        # <link rel="webmention" href="https://webmention.io/nedbatchelder.com/webmention">
+        for link in resp.soup().find_all("link", {"rel": "webmention", "href": True}):
+            if href := link["href"].strip():
+                site.webmention.add(href)
+
     async def read_wanderjs(self, site: Site, relative_url: str) -> None:
         req = Req(
             relative_url,
@@ -343,6 +352,7 @@ class Crawler:
         self.read_feed_links(site, page_resp)
         self.read_jsonld(site, page_resp)
         self.read_relme(site, page_resp)
+        self.read_webmention(site, page_resp)
         await self.read_blogrolls(site, page_resp)
         site.url = root_for_url(page_resp.url)
         self.sites.by_url[site.url] = site
