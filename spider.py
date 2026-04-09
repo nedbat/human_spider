@@ -39,6 +39,7 @@ class Site:
         self.fediverse_creator: str | None = None
         self.feeds: set[str] = set()
         self.blogroll: set[str] = set()
+        self.relme: set[str] = set()
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
@@ -67,6 +68,8 @@ class Site:
             print(f"    feed: {feed}")
         for roll in self.blogroll:
             print(f"    blogroll: {roll}")
+        for me in self.relme:
+            print(f"    rel=me: {me}")
 
 
 class Sites:
@@ -303,6 +306,12 @@ class Crawler:
             else:
                 self.extract_facts_from_jsonld(site, jsonld)
 
+    def read_relme(self, site: Site, resp: Resp) -> None:
+        # <a href="https://bsky.app/profile/nedbat.com" rel="me">bluesky</a>
+        for tag in resp.soup().find_all("a", {"rel": "me", "href": True}):
+            if href := tag["href"].strip():
+                site.relme.add(href)
+
     async def read_wanderjs(self, site: Site, relative_url: str) -> None:
         req = Req(
             relative_url,
@@ -333,6 +342,7 @@ class Crawler:
         self.read_meta_tags(site, page_resp)
         self.read_feed_links(site, page_resp)
         self.read_jsonld(site, page_resp)
+        self.read_relme(site, page_resp)
         await self.read_blogrolls(site, page_resp)
         site.url = root_for_url(page_resp.url)
         self.sites.by_url[site.url] = site
