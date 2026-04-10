@@ -430,6 +430,12 @@ class Crawler:
             for row in json.loads(json_text)["table"]["rows"]:
                 await self.site_for_url(row["c"][0]["v"])
 
+    async def load_noai_webring(self) -> None:
+        resp = await Req("https://baccyflap.com/noai/webring.json").get()
+        if resp is not None:
+            for site in resp.json():
+                await self.site_for_url(site["url"])
+
     async def load_ooh_directory(self) -> None:
         for line in Path("ooh_directory.txt").open():
             await self.site_for_url(line.strip())
@@ -481,6 +487,7 @@ class Crawler:
         await self.queue_work(self.load_indieblog)
         await self.queue_work(self.load_blogroll_org)
         await self.queue_work(self.load_a_website_is_a_room)
+        await self.queue_work(self.load_noai_webring)
         # await self.queue_work(self.load_ooh_directory)
 
         await self.run_workers(n_workers)
