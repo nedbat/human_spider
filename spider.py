@@ -1,13 +1,3 @@
-# /// script
-# requires-python = ">=3.14"
-# dependencies = [
-#   "aiohttp",
-#   "beautifulsoup4",
-#   "demjson3",
-#   "listparser",
-# ]
-# ///
-
 import asyncio
 import collections
 import json
@@ -491,7 +481,7 @@ class Crawler:
         await self.queue_work(self.load_indieblog)
         await self.queue_work(self.load_blogroll_org)
         await self.queue_work(self.load_a_website_is_a_room)
-        await self.queue_work(self.load_ooh_directory)
+        # await self.queue_work(self.load_ooh_directory)
 
         await self.run_workers(n_workers)
         self.print_results()
