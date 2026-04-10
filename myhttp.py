@@ -33,7 +33,7 @@ def root_for_url(url: str) -> str:
 
 
 # Don't request from the same IP more than once per this many seconds.
-ONE_PER = 0.25
+ONE_PER = 0.5
 
 
 class TryLater(Exception):
@@ -49,9 +49,8 @@ class AccessInfo:
     """Information about when we can access a resource."""
 
     # Don't access it until after this time.
-    next_ok: float
     # The farthest out time we told someone to wait.
-    last_waiter: float
+    next_ok: float
 
 
 class RateLimiter:
@@ -67,15 +66,14 @@ class RateLimiter:
         now_next = now + self.one_per
         info = self.resources.get(resource)
         if info is None:
-            self.resources[resource] = AccessInfo(next_ok=now_next, last_waiter=now_next)
+            self.resources[resource] = AccessInfo(next_ok=now_next)
             return 0
         elif now > info.next_ok:
-            info.next_ok = info.last_waiter = now_next
+            info.next_ok = now_next
             return 0
         else:
-            my_time = info.last_waiter + self.one_per * 1.05
-            info.last_waiter = my_time
-            return my_time - now
+            info.next_ok += self.one_per * 1.02
+            return info.next_ok - now
 
 
 limiter = RateLimiter(one_per=ONE_PER)
