@@ -331,7 +331,6 @@ class Crawler:
         resp = await req.get()
         if resp is not None:
             site.wander_js = True
-            resp.save(dirname="data")
             wander_data = parse_wander(resp.text())
             for console in wander_data["consoles"]:
                 console = fix_url(console)
@@ -395,9 +394,10 @@ class Crawler:
         if guessed:
             req.ok_errors = {400, 403, 404, 406, 410}
         if (resp := await req.get()) is None:
+            if not guessed:
+                error(f"human.json: {hjurl} returned error")
             return None
 
-        resp.save(dirname="data")
         if b"<html" in resp.content:
             if not guessed:
                 error(f"{hjurl} served HTML")

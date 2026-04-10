@@ -171,7 +171,9 @@ class Req:
                     ):
                         return None
                     resp.raise_for_status()
-                    return Resp(resp, await resp.content.read())
+                    rresp = Resp(resp, await resp.content.read())
+                    rresp.save(dirname="data")
+                    return rresp
         except Exception as e:
             fetch_log.info("Fetch %s ** %s: %s", show_url, e.__class__.__name__, e)
             raise
