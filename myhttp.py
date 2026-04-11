@@ -1,7 +1,6 @@
 """HTTP helpers."""
 
 import json
-import logging
 import mimetypes
 import re
 import socket
@@ -14,6 +13,8 @@ from typing import Any, Collection
 
 import aiohttp
 from bs4 import BeautifulSoup
+
+from logs import fetch_log
 
 
 def slug_for_url(url: str) -> str:
@@ -116,15 +117,6 @@ class Resp:
             f.write(self.content)
 
 
-fetch_log = logging.getLogger("fetch")
-fetch_log.setLevel(logging.DEBUG)
-fetch_handler = logging.FileHandler("fetch.log", mode="w")
-fetch_handler.setFormatter(
-    logging.Formatter("%(asctime)s.%(msecs)03d %(message)s", datefmt="%H:%M:%S")
-)
-fetch_log.addHandler(fetch_handler)
-
-
 @dataclass
 class Req:
     url: str
@@ -173,5 +165,5 @@ class Req:
                     rresp.save(dirname="data")
                     return rresp
         except Exception as e:
-            fetch_log.info("Fetch %s ** %s: %s", show_url, e.__class__.__name__, e)
+            fetch_log.info("Error %s: %s: %s", show_url, e.__class__.__name__, e)
             raise

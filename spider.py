@@ -15,6 +15,7 @@ import listparser
 
 from myhttp import fix_url, root_for_url, slug_for_url, Req, Resp, ONE_PER, TryLater
 from myjson import fix_json
+from logs import fetch_log
 from parse_wander import parse_wander
 from report import error, print_both
 
@@ -138,6 +139,7 @@ class Crawler:
             except TryLater as tle:
                 if work.retries >= 20:
                     error(f"retried {work} {work.retries} times, last {tle.delay:.3f}s")
+                    fetch_log.info(f"Quit  %s", work)
                 else:
                     # pick a max delay, but a bit random
                     max_delay = 20 + random.random() * 10
@@ -488,7 +490,7 @@ class Crawler:
         await self.queue_work(self.load_blogroll_org)
         await self.queue_work(self.load_a_website_is_a_room)
         await self.queue_work(self.load_noai_webring)
-        # await self.queue_work(self.load_ooh_directory)
+        await self.queue_work(self.load_ooh_directory)
 
         await self.run_workers(n_workers)
         self.print_results()
