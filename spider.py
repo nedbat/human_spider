@@ -1,14 +1,13 @@
 import asyncio
 import collections
 import json
-import random
 import sys
 import time
 import urllib.parse
 
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterator
 
 import demjson3
 import listparser
@@ -108,7 +107,9 @@ class WorkItem:
 def nice_seconds(s: int) -> str:
     m, s = divmod(s, 60)
     h, m = divmod(m, 60)
-    parts = zip([h, m, s], "hms")
+    d, h = divmod(h, 24)
+    w, d = divmod(d, 7)
+    parts = zip([w, d, h, m, s], "wdhms")
     return "".join(f"{n}{u}" for n, u in parts if n) or "0s"
 
 
@@ -132,21 +133,19 @@ class Crawler:
             retrying = False
             try:
                 await work.fn(**work.kwargs)
-                if work.retries > 3:
+                if work.retries > 10:
                     print_both(
                         f"** Success after {work.retries}, {work.total_delay:.3f}s: {work}"
                     )
             except TryLater as tle:
                 if work.retries >= 20:
                     error(f"retried {work} {work.retries} times, last {tle.delay:.3f}s")
-                    fetch_log.info(f"Quit  %s", work)
+                    fetch_log.info("Quit  %s", work)
                 else:
-                    # pick a max delay, but a bit random
-                    max_delay = 20 + random.random() * 10
-                    delay = min(tle.delay, max_delay)
+                    delay = tle.delay
                     work.retries += 1
                     work.total_delay += delay
-                    if work.retries > 3:
+                    if work.retries > 10:
                         print_both(
                             f"** Retrying {work}: {work.retries}, {delay:.3f}s: {tle.reason}"
                         )

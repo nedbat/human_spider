@@ -35,6 +35,8 @@ def root_for_url(url: str) -> str:
 
 # Don't request from the same IP more than once per this many seconds.
 ONE_PER = 0.5
+# How long we'll wait for an answer.
+TIMEOUT = 30
 
 
 class TryLater(Exception):
@@ -145,7 +147,7 @@ class Req:
                 headers = {
                     "User-Agent": "nedbat's human website crawler, https://nedbatchelder.com/blog/202603/humanjson",
                 }
-                async with session.get(url, timeout=10, headers=headers) as resp:
+                async with session.get(url, timeout=TIMEOUT, headers=headers) as resp:
                     # from report import print_both
                     # print_both(f"   Got {url} ({ip}): status={resp.status}")
                     fetch_log.info("Fetch %s, status=%s", show_url, resp.status)
