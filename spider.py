@@ -313,10 +313,13 @@ class Crawler:
             if href := link["href"].strip():
                 site.webmention.add(href)
 
-    async def read_wanderjs(self, site: Site, relative_url: str) -> None:
+    async def read_wanderjs(self, console_url: str) -> None:
+        site = await self.site_for_url(console_url)
+        if site.wander_js:
+            return
         req = Req(
-            relative_url,
-            base=site.url,
+            "wander.js",
+            base=console_url.rstrip("/") + "/",
             fail_ok=True,
             ok_content_types=["text/javascript", "application/javascript"],
         )
@@ -327,7 +330,7 @@ class Crawler:
             for console in wander_data["consoles"]:
                 console = fix_url(console)
                 self.wander_consoles.add(console)
-                await self.site_for_url(console)
+                await self.queue_work(self.read_wanderjs, console_url=console)
             for page in wander_data["pages"]:
                 page = fix_url(page)
                 self.wander_pages.add(page)
@@ -348,20 +351,6 @@ class Crawler:
         site.url = root_for_url(page_resp.url)
         self.sites.by_url[site.url] = site
 
-        await self.queue_work(
-            self.read_wanderjs,
-            delay=3.25 * ONE_PER,
-            site=site,
-            relative_url="/wander/wander.js",
-        )
-        await self.queue_work(
-            self.read_wanderjs,
-            delay=4.35 * ONE_PER,
-            site=site,
-            relative_url="/wander.js",
-        )
-
-        guessed = False
         hjurl = ""
         if page_resp is not None:
             for item in page_resp.soup().find_all(
@@ -369,30 +358,22 @@ class Crawler:
             ):
                 hjurl = item["href"]
                 break
-        if not hjurl:
-            hjurl = "/human.json"
-            guessed = True
+        if hjurl:
+            await self.queue_work(
+                self.read_human_json,
+                delay=2.25 * ONE_PER,
+                site=site,
+                hjurl=hjurl,
+            )
 
-        await self.queue_work(
-            self.read_human_json,
-            delay=2.25 * ONE_PER,
-            site=site,
-            hjurl=hjurl,
-            guessed=guessed,
-        )
-
-    async def read_human_json(self, site: Site, hjurl: str, guessed: bool) -> None:
+    async def read_human_json(self, site: Site, hjurl: str) -> None:
         req = Req(hjurl, base=site.url)
-        if guessed:
-            req.ok_errors = {400, 403, 404, 406, 410}
         if (resp := await req.get()) is None:
-            if not guessed:
-                error(f"human.json: {hjurl} returned error")
+            error(f"human.json: {hjurl} returned error")
             return None
 
         if b"<html" in resp.content:
-            if not guessed:
-                error(f"{hjurl} served HTML")
+            error(f"{hjurl} served HTML")
             return None
 
         site.human_json = hjurl
@@ -483,9 +464,15 @@ class Crawler:
         rolls = sum(len(s.blogroll) for s in self.sites)
         print(f"\nFound {rolls} blogrolls")
 
-    async def main(self, start_urls: Iterable[str], n_workers: int) -> None:
-        for url in start_urls:
-            await self.site_for_url(url)
+    async def main(self, n_workers: int) -> None:
+        await self.queue_work(
+            self.get_site_data,
+            site=await self.site_for_url("https://nedbatchelder.com"),
+        )
+        await self.queue_work(
+            self.read_wanderjs,
+            console_url="https://susam.net/wander",
+        )
         await self.queue_work(self.load_indieblog)
         await self.queue_work(self.load_blogroll_org)
         await self.queue_work(self.load_a_website_is_a_room)
@@ -497,8 +484,4 @@ class Crawler:
 
 
 if __name__ == "__main__":
-    urls = [
-        "https://nedbatchelder.com",
-        "https://susam.net",
-    ]
-    asyncio.run(Crawler().main(urls, 40))
+    asyncio.run(Crawler().main(40))
