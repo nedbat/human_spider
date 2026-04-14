@@ -34,7 +34,9 @@ def root_for_url(url: str) -> str:
 
 
 # Don't request from the same IP more than once per this many seconds.
-ONE_PER = 0.5
+ONE_PER = 0.25
+# The longest we'll wait between requests to the same IP
+MAX_ONE_PER = 10
 # How long we'll wait for an answer.
 TIMEOUT = 30
 
@@ -51,8 +53,11 @@ class TryLater(Exception):
 class AccessInfo:
     """Information about when we can access a resource."""
 
-    # Don't access it until after this time.
-    # The farthest out time we told someone to wait.
+    # How many seconds between requests?
+    one_per: float
+    # The last time we allowed a request through.
+    last_allowed: float
+    # The farthest-out reserved slot for a denied request.
     next_ok: float
 
 
@@ -66,17 +71,23 @@ class RateLimiter:
     def should_wait(self, resource: str) -> float:
         """How long should we wait to access this resource?"""
         now = time.time()
-        now_next = now + self.one_per
         info = self.resources.get(resource)
         if info is None:
-            self.resources[resource] = AccessInfo(next_ok=now_next)
+            self.resources[resource] = AccessInfo(
+                one_per=self.one_per, last_allowed=now, next_ok=now + self.one_per
+            )
             return 0
-        elif now > info.next_ok:
-            info.next_ok = now_next
+        if now >= info.last_allowed + info.one_per:
+            info.last_allowed = now
             return 0
-        else:
-            info.next_ok += self.one_per * 1.02
-            return info.next_ok - now
+        # Deny: reserve the next slot past the current queue end.
+        delay_until = max(info.next_ok, info.last_allowed + info.one_per)
+        info.next_ok = delay_until + info.one_per
+        return delay_until - now
+
+    def slow_down(self, resource: str) -> None:
+        info = self.resources[resource]
+        info.one_per = min(MAX_ONE_PER, info.one_per * 2)
 
 
 limiter = RateLimiter(one_per=ONE_PER)
@@ -139,9 +150,10 @@ class Req:
         show_url = f"{url} ({ip})"
         delay = limiter.should_wait(ip)
         if delay > 0:
-            fetch_log.info("Delay %s for %.1f", show_url, delay)
+            fetch_log.info("Delay %s for %.3f", show_url, delay)
             raise TryLater(delay=delay, reason=f"limit for {netloc} ({ip})")
 
+        fetch_log.info("Start %s", show_url)
         try:
             async with aiohttp.ClientSession() as session:
                 headers = {
@@ -152,7 +164,8 @@ class Req:
                     # print_both(f"   Got {url} ({ip}): status={resp.status}")
                     fetch_log.info("Fetch %s, status=%s", show_url, resp.status)
                     if resp.status == 429:
-                        raise TryLater(delay=3, reason="status=429")
+                        limiter.slow_down(ip)
+                        raise TryLater(delay=MAX_ONE_PER, reason="status=429")
                     if resp.status != 200 and self.fail_ok:
                         return None
                     if resp.status in self.ok_errors:
