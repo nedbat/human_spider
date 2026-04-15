@@ -34,7 +34,7 @@ def root_for_url(url: str) -> str:
 
 
 # Don't request from the same IP more than once per this many seconds.
-ONE_PER = 0.25
+ONE_PER = 0.125
 # The longest we'll wait between requests to the same IP
 MAX_ONE_PER = 10
 # How long we'll wait for an answer.
@@ -164,8 +164,10 @@ class Req:
                     # print_both(f"   Got {url} ({ip}): status={resp.status}")
                     fetch_log.info("Fetch %s, status=%s", show_url, resp.status)
                     if resp.status == 429:
-                        limiter.slow_down(ip)
-                        raise TryLater(delay=MAX_ONE_PER, reason="status=429")
+                        # In practice, I haven't seen Retry-After headers, and
+                        # slowing down didn't help, I just kept getting 429's,
+                        # so give up.
+                        return None
                     if resp.status != 200 and self.fail_ok:
                         return None
                     if resp.status in self.ok_errors:
