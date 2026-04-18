@@ -1,9 +1,13 @@
 .PHONY: spider quality
 
 spider:
+	@-grep Found out.txt > last_found.txt
 	-rm -f data/*
-	@-grep Found out.txt
 	uv run spider.py > out.txt
+	@echo === last time ===
+	@cat last_found.txt
+	@rm last_found.txt
+	@echo === this time ===
 	grep Found out.txt
 
 quality:
