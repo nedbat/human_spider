@@ -22,6 +22,7 @@ from report import error, print_both
 class Site:
     def __init__(self, url: str) -> None:
         self.url = url
+        self.urls: set[str] = {url}
         self.vouchers: set[str] = set()
         self.author = ""
         self.human_json: str | None = None
@@ -43,6 +44,10 @@ class Site:
 
     def print(self) -> None:
         print(self.url)
+        if len(self.urls) > 1:
+            print("    urls:")
+            for u in sorted(self.urls):
+                print(f"        {u}")
         if self.vouchers:
             print(f"    {len(self.vouchers)} human vouchers")
             for v in self.vouchers:
@@ -75,12 +80,29 @@ class Sites:
         site = self.by_url.get(url)
         if site is None:
             site = Site(url)
+            print(f"URL {url} is site {nice_id(site)}")
             self.all.append(site)
             self.by_url[url] = site
             is_new = True
         else:
             is_new = False
         return site, is_new
+
+    def rename_site(self, site: Site, new_url: str) -> bool:
+        """A site actually has a different name.
+
+        Returns True if processing should continue on this site,
+        or False if there's another site already for it.
+        """
+        new_site = self.by_url.get(new_url)
+        if new_site is not None:
+            new_site.urls.add(site.url)
+            return False
+
+        site.url = new_url
+        site.urls.add(new_url)
+        self.by_url[new_url] = site
+        return True
 
     def __len__(self) -> int:
         return len(self.all)
@@ -111,6 +133,18 @@ def nice_seconds(s: int) -> str:
     w, d = divmod(d, 7)
     parts = zip([w, d, h, m, s], "wdhms")
     return "".join(f"{n}{u}" for n, u in parts if n) or "0s"
+
+
+def nice_id(obj: Any) -> str:
+    import string
+
+    alphabet = string.ascii_letters
+    nid = ""
+    i = id(obj)
+    while i:
+        i, digit = divmod(i, len(alphabet))
+        nid += alphabet[digit]
+    return nid
 
 
 class Crawler:
@@ -341,14 +375,18 @@ class Crawler:
         if page_resp is None:
             return
 
+        new_url = root_for_url(page_resp.url)
+        if new_url != site.url:
+            print(f"Changing {site.url} to {new_url} for site {nice_id(site)}")
+            if not self.sites.rename_site(site, new_url):
+                return
+
         self.read_meta_tags(site, page_resp)
         self.read_feed_links(site, page_resp)
         self.read_jsonld(site, page_resp)
         self.read_relme(site, page_resp)
         self.read_webmention(site, page_resp)
         await self.read_blogrolls(site, page_resp)
-        site.url = root_for_url(page_resp.url)
-        self.sites.by_url[site.url] = site
 
         hjurl = ""
         if page_resp is not None:
@@ -425,7 +463,7 @@ class Crawler:
     # Main code
 
     def print_results(self) -> None:
-        print(f"\n\nFound {len(self.sites)} sites:")
+        print(f"\n\nFound {len(self.sites)} sites ({len(self.sites.by_url)} by url):")
         for site in sorted(self.sites):
             site.print()
 
