@@ -509,10 +509,7 @@ class Crawler:
         print(f"\nFound {rolls} blogrolls")
 
     async def main(self, n_workers: int) -> None:
-        await self.queue_work(
-            self.get_site_data,
-            site=await self.site_for_url("https://nedbatchelder.com"),
-        )
+        await self.site_for_url("https://nedbatchelder.com")
         await self.queue_work(
             self.read_wanderjs,
             console_url="https://susam.net/wander",
