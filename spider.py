@@ -7,7 +7,7 @@ import urllib.parse
 
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 import demjson3
 import listparser
@@ -147,6 +147,11 @@ def nice_id(obj: Any) -> str:
     return nid
 
 
+def one_from[T](them: Iterable[T]) -> T:
+    """Get one item from an iterable."""
+    return next(iter(them))
+
+
 class Crawler:
     def __init__(self) -> None:
         self.queue: asyncio.Queue[WorkItem] = asyncio.Queue()
@@ -158,6 +163,7 @@ class Crawler:
         self.human_jsons: dict[str, int] = {}
         self.wander_consoles: set[str] = set()
         self.wander_pages: set[str] = set()
+        self.rels: dict[str, set[str]] = collections.defaultdict(set)
 
     # Generic async working
 
@@ -347,6 +353,11 @@ class Crawler:
             if href := link["href"].strip():
                 site.webmention.add(href)
 
+    def read_rels(self, site: Site, resp: Resp) -> None:
+        for tag in resp.soup().find_all(["link", "a"], {"rel": True}):
+            for rel in tag["rel"]:
+                self.rels[rel].add(site.url)
+
     async def read_wanderjs(self, console_url: str) -> None:
         # https://codeberg.org/susam/wander#readme
         site = await self.site_for_url(console_url)
@@ -387,6 +398,7 @@ class Crawler:
         self.read_feed_links(site, page_resp)
         self.read_jsonld(site, page_resp)
         self.read_relme(site, page_resp)
+        self.read_rels(site, page_resp)
         self.read_webmention(site, page_resp)
         await self.read_blogrolls(site, page_resp)
 
@@ -507,6 +519,10 @@ class Crawler:
 
         rolls = sum(len(s.blogroll) for s in self.sites)
         print(f"\nFound {rolls} blogrolls")
+
+        print(f"\nFound {len(self.rels)} rel=")
+        for rel, rel_urls in sorted(self.rels.items()):
+            print(f"{rel}: {len(rel_urls)} urls, like {one_from(rel_urls)}")
 
     async def main(self, n_workers: int) -> None:
         await self.site_for_url("https://nedbatchelder.com")
