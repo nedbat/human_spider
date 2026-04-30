@@ -157,7 +157,7 @@ class Req:
         try:
             async with aiohttp.ClientSession() as session:
                 headers = {
-                    "User-Agent": "nedbat's human website crawler, https://nedbatchelder.com/blog/202603/humanjson",
+                    "User-Agent": "nedbat's human website crawler, https://github.com/nedbat/human_spider",
                 }
                 async with session.get(url, timeout=TIMEOUT, headers=headers) as resp:
                     # from report import print_both

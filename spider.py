@@ -252,6 +252,7 @@ class Crawler:
         return site
 
     def extract_facts_from_jsonld(self, site: Site, jsonld: dict | list) -> None:
+        # https://json-ld.org/
         match jsonld:
             case list():
                 for jld in jsonld:
@@ -347,6 +348,7 @@ class Crawler:
                 site.webmention.add(href)
 
     async def read_wanderjs(self, console_url: str) -> None:
+        # https://codeberg.org/susam/wander#readme
         site = await self.site_for_url(console_url)
         if site.wander_js:
             return
@@ -428,12 +430,14 @@ class Crawler:
     # One-off blog sources.
 
     async def load_indieblog(self) -> None:
+        # https://indieblog.page/
         resp = await Req("https://indieblog.page/export").get()
         if resp is not None:
             for feed in resp.json():
                 await self.site_for_url(feed["homepage"])
 
     async def load_blogroll_org(self) -> None:
+        # https://blogroll.org/
         resp = await Req("https://blogroll.org/").get()
         if resp is not None:
             for entry in resp.soup().find_all(
@@ -442,6 +446,7 @@ class Crawler:
                 await self.site_for_url(entry["href"])
 
     async def load_a_website_is_a_room(self) -> None:
+        # https://a-website-is-a-room.net/
         url = "https://docs.google.com/spreadsheets/d/1KjiqdG8EmGd8oPVSNwRcFedNQPG1A45ycoRpYvGzKIg/gviz/tq?gid=0&tq=select%20B%20order%20by%20D%20desc&tqx=responseHandler:gimmedata"
         resp = await Req(url).get()
         if resp is not None:
@@ -451,12 +456,14 @@ class Crawler:
                 await self.site_for_url(row["c"][0]["v"])
 
     async def load_noai_webring(self) -> None:
+        # https://baccyflap.com/noai
         resp = await Req("https://baccyflap.com/noai/webring.json").get()
         if resp is not None:
             for site in resp.json():
                 await self.site_for_url(site["url"])
 
     async def load_ooh_directory(self) -> None:
+        # https://ooh.directory/
         for line in Path("ooh_directory.txt").open():
             await self.site_for_url(line.strip())
 
