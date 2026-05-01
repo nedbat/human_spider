@@ -520,8 +520,11 @@ class Crawler:
         rolls = sum(len(s.blogroll) for s in self.sites)
         print(f"\nFound {rolls} blogrolls")
 
-        print(f"\nFound {len(self.rels)} rel=")
-        for rel, rel_urls in sorted(self.rels.items()):
+        # rel= attributes have lots of single-use names that don't seem valid
+        # to me, so omit them.
+        rels = [(k, v) for k, v in self.rels.items() if len(v) > 1]
+        print(f"\nFound {len(rels)} rel=")
+        for rel, rel_urls in sorted(rels):
             print(f"{rel}: {len(rel_urls)} urls, like {one_from(rel_urls)}")
 
     async def main(self, n_workers: int) -> None:
