@@ -357,10 +357,13 @@ class Crawler:
             if href := link["href"].strip():
                 site.webmention.add(href)
 
-    def read_rels(self, site: Site, resp: Resp) -> None:
+    async def read_rels(self, site: Site, resp: Resp) -> None:
         for tag in resp.soup().find_all(["link", "a"], {"rel": True}):
             for rel in tag["rel"]:
                 self.rels[rel].add(site.url)
+                if rel == "meta":
+                    print_both(f"rel=meta on {site}: {tag}")
+                    await self.queue_work(self.just_fetch, site=site, url=tag["href"])
 
     async def read_wanderjs(self, console_url: str) -> None:
         # https://codeberg.org/susam/wander#readme
@@ -399,6 +402,10 @@ class Crawler:
             except (ValueError, KeyError):
                 pass
 
+    async def just_fetch(self, site: Site, url: str) -> None:
+        """Fetch a url just so it will be saved for examination."""
+        await Req(url, base=site.url, fail_ok=True).get()
+
     async def get_site_data(self, site: Site) -> None:
         # fail_ok=True because bots might be forbidden
         page_resp = await Req(site.url, fail_ok=True).get()
@@ -415,7 +422,7 @@ class Crawler:
         self.read_feed_links(site, page_resp)
         self.read_jsonld(site, page_resp)
         self.read_relme(site, page_resp)
-        self.read_rels(site, page_resp)
+        await self.read_rels(site, page_resp)
         self.read_webmention(site, page_resp)
         await self.read_blogrolls(site, page_resp)
         await self.queue_work(self.read_webfinger, delay=1.1 * ONE_PER, site=site)
