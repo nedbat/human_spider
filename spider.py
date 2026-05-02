@@ -32,6 +32,7 @@ class Site:
         self.blogroll: set[str] = set()
         self.relme: set[str] = set()
         self.webmention: set[str] = set()
+        self.webfinger: bool = False
 
     def __str__(self) -> str:
         return self.url.rstrip("/")
@@ -68,6 +69,8 @@ class Site:
             print(f"    rel=me: {me}")
         for w in self.webmention:
             print(f"    webmention: {w}")
+        if self.webfinger:
+            print("    has webfinger")
 
 
 class Sites:
@@ -164,6 +167,7 @@ class Crawler:
         self.wander_consoles: set[str] = set()
         self.wander_pages: set[str] = set()
         self.rels: dict[str, set[str]] = collections.defaultdict(set)
+        self.webfinger_rels: dict[str, set[str]] = collections.defaultdict(set)
 
     # Generic async working
 
@@ -382,6 +386,19 @@ class Crawler:
                 self.wander_pages.add(page)
                 await self.site_for_url(page)
 
+    async def read_webfinger(self, site: Site) -> None:
+        # https://swicg.github.io/activitypub-webfinger/#forward-discovery
+        req = Req("/.well-known/webfinger", base=site.url, fail_ok=True)
+        resp = await req.get()
+        if resp:
+            site.webfinger = True
+            try:
+                finger = resp.json()
+                for link in finger["links"]:
+                    self.webfinger_rels[link["rel"]].add(site.url)
+            except (ValueError, KeyError):
+                pass
+
     async def get_site_data(self, site: Site) -> None:
         # fail_ok=True because bots might be forbidden
         page_resp = await Req(site.url, fail_ok=True).get()
@@ -401,6 +418,7 @@ class Crawler:
         self.read_rels(site, page_resp)
         self.read_webmention(site, page_resp)
         await self.read_blogrolls(site, page_resp)
+        await self.queue_work(self.read_webfinger, delay=1.1 * ONE_PER, site=site)
 
         hjurl = ""
         if page_resp is not None:
@@ -525,6 +543,10 @@ class Crawler:
         rels = [(k, v) for k, v in self.rels.items() if len(v) > 1]
         print(f"\nFound {len(rels)} rel=")
         for rel, rel_urls in sorted(rels):
+            print(f"{rel}: {len(rel_urls)} urls, like {one_from(rel_urls)}")
+
+        print(f"\nFound {len(self.webfinger_rels)} webfinger rels")
+        for rel, rel_urls in sorted(self.webfinger_rels.items()):
             print(f"{rel}: {len(rel_urls)} urls, like {one_from(rel_urls)}")
 
     async def main(self, n_workers: int) -> None:
