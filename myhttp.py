@@ -6,15 +6,21 @@ import re
 import socket
 import time
 import urllib.parse
+import warnings
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Collection
 
 import aiohttp
-from bs4 import BeautifulSoup
+import bs4
+import truststore
 
 from logs import fetch_log
+
+
+warnings.filterwarnings("ignore", category=bs4.XMLParsedAsHTMLWarning)
+truststore.inject_into_ssl()
 
 
 def slug_for_url(url: str) -> str:
@@ -101,7 +107,7 @@ class Resp:
 
     def soup(self):
         if self._soup is None:
-            self._soup = BeautifulSoup(self.content, "html.parser")
+            self._soup = bs4.BeautifulSoup(self.content, "html.parser")
         return self._soup
 
     @property
