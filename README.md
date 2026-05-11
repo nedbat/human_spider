@@ -29,6 +29,7 @@ Other sources to explore:
 
 - https://bubbles.town
 - https://docs.octothorp.es/
+- https://theindex.fyi
 
 Other linking standards:
 

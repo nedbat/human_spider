@@ -504,6 +504,14 @@ class Crawler:
         for line in Path("ooh_directory.txt").open():
             await self.site_for_url(line.strip())
 
+    async def load_personalsit_es(self) -> None:
+        # https://personalsit.es/
+        resp = await Req("https://personalsit.es").get()
+        if resp is not None:
+            # <li id="https://etc" class="item">
+            for entry in resp.soup().find_all("li", {"class": "item", "id": True}):
+                await self.site_for_url(entry["id"])
+
     # Main code
 
     def print_results(self) -> None:
@@ -567,6 +575,7 @@ class Crawler:
         await self.queue_work(self.load_a_website_is_a_room)
         await self.queue_work(self.load_noai_webring)
         await self.queue_work(self.load_ooh_directory)
+        await self.queue_work(self.load_personalsit_es)
 
         await self.run_workers(n_workers)
         self.print_results()
